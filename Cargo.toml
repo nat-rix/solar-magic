@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["ui"]
+
+[package]
+name = "solar-magic"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies.bytemuck]
+version = "1.22"
+features = ["derive"]
