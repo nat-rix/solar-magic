@@ -79,7 +79,25 @@ pub mod am {
 use am::*;
 
 #[derive(Debug, Clone, Copy)]
+pub struct FlagSet(pub u8);
+
+#[derive(Debug, Clone, Copy)]
 pub struct NearLabel(pub u8);
+
+#[derive(Debug, Clone, Copy)]
+pub struct RelativeLabel(pub u16);
+
+#[derive(Debug, Clone, Copy)]
+pub struct AbsoluteLabel(pub u16);
+
+#[derive(Debug, Clone, Copy)]
+pub struct IndirectLabel(pub u16);
+
+#[derive(Debug, Clone, Copy)]
+pub struct IndirectIndexedLabel(pub u16);
+
+#[derive(Debug, Clone, Copy)]
+pub struct IndirectLongLabel(pub u16);
 
 impl NearLabel {
     pub fn take(&self, pc: Addr) -> Addr {
@@ -101,6 +119,74 @@ impl I {
             f().map(Self::U8)
         } else {
             f16(f).map(Self::U16)
+        }
+    }
+
+    pub const fn size(&self) -> u8 {
+        match self {
+            Self::U8(_) => 1,
+            Self::U16(_) => 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum InstructionArgument {
+    Signature(u8),
+    A(A),
+    Ax(Ax),
+    Ay(Ay),
+    Al(Al),
+    Alx(Alx),
+    D(D),
+    Dx(Dx),
+    Dy(Dy),
+    Dxi(Dxi),
+    Diy(Diy),
+    Dily(Dily),
+    Di(Di),
+    Dil(Dil),
+    S(S),
+    Siy(Siy),
+    I(I),
+    NearLabel(NearLabel),
+    RelativeLabel(RelativeLabel),
+    AbsoluteLabel(AbsoluteLabel),
+    LongLabel(Addr),
+    IndirectLabel(IndirectLabel),
+    IndirectIndexedLabel(IndirectIndexedLabel),
+    IndirectLongLabel(IndirectLongLabel),
+    Flags(FlagSet),
+    Move(u8, u8),
+}
+
+impl InstructionArgument {
+    pub const fn size(&self) -> u8 {
+        match self {
+            Self::Signature(_)
+            | Self::D(_)
+            | Self::Dx(_)
+            | Self::Dy(_)
+            | Self::Dxi(_)
+            | Self::Diy(_)
+            | Self::Dily(_)
+            | Self::Di(_)
+            | Self::Dil(_)
+            | Self::S(_)
+            | Self::Siy(_)
+            | Self::NearLabel(_)
+            | Self::Flags(_) => 1,
+            Self::A(_)
+            | Self::Ax(_)
+            | Self::Ay(_)
+            | Self::RelativeLabel(_)
+            | Self::AbsoluteLabel(_)
+            | Self::IndirectLabel(_)
+            | Self::IndirectIndexedLabel(_)
+            | Self::IndirectLongLabel(_)
+            | Self::Move(_, _) => 2,
+            Self::Al(_) | Self::Alx(_) | Self::LongLabel(_) => 3,
+            Self::I(i) => i.size(),
         }
     }
 }
@@ -139,7 +225,7 @@ pub enum Instruction {
     OraAx(Ax),
     AslAx(Ax),
     OraAlx(Alx),
-    Jsr(u16),
+    Jsr(AbsoluteLabel),
     AndDxi(Dxi),
     Jsl(Addr),
     AndS(S),
@@ -184,7 +270,7 @@ pub enum Instruction {
     EorI(I),
     LsrAc,
     Phk,
-    Jmp(u16),
+    Jmp(AbsoluteLabel),
     EorA(A),
     LsrA(A),
     EorAl(Al),
@@ -207,7 +293,7 @@ pub enum Instruction {
     EorAlx(Alx),
     Rts,
     AdcDxi(Dxi),
-    Per(u16),
+    Per(RelativeLabel),
     AdcS(S),
     StzD(D),
     AdcD(D),
@@ -217,7 +303,7 @@ pub enum Instruction {
     AdcI(I),
     RorAc,
     Rtl,
-    Jmpi(u16),
+    Jmpi(IndirectLabel),
     AdcA(A),
     RorA(A),
     AdcAl(Al),
@@ -233,13 +319,13 @@ pub enum Instruction {
     AdcAy(Ay),
     Ply,
     Tdc,
-    Jmpxi(u16),
+    Jmpxi(IndirectIndexedLabel),
     AdcAx(Ax),
     RorAx(Ax),
     AdcAlx(Alx),
     Bra(NearLabel),
     StaDxi(Dxi),
-    Brl(NearLabel),
+    Brl(RelativeLabel),
     StaS(S),
     StyD(D),
     StaD(D),
@@ -303,7 +389,7 @@ pub enum Instruction {
     LdaAlx(Alx),
     CpyI(I),
     CmpDxi(Dxi),
-    Rep(u8),
+    Rep(FlagSet),
     CmpS(S),
     CpyD(D),
     CmpD(D),
@@ -321,7 +407,7 @@ pub enum Instruction {
     CmpDiy(Diy),
     CmpDi(Di),
     CmpSiy(Siy),
-    Pei(u8),
+    Pei(Di),
     CmpDx(Dx),
     DecDx(Dx),
     CmpDily(Dily),
@@ -329,13 +415,13 @@ pub enum Instruction {
     CmpAy(Ay),
     Phx,
     Stp,
-    Jmli(u16),
+    Jmli(IndirectLongLabel),
     CmpAx(Ax),
     DecAx(Ax),
     CmpAlx(Alx),
     CpxI(I),
     SbcDxi(Dxi),
-    Sep(u8),
+    Sep(FlagSet),
     SbcS(S),
     CpxD(D),
     SbcD(D),
@@ -353,7 +439,7 @@ pub enum Instruction {
     SbcDiy(Diy),
     SbcDi(Di),
     SbcSiy(Siy),
-    Pea(u16),
+    Pea(AbsoluteLabel),
     SbcDx(Dx),
     IncDx(Dx),
     SbcDily(Dily),
@@ -361,7 +447,7 @@ pub enum Instruction {
     SbcAy(Ay),
     Plx,
     Xce,
-    Jsrxi(u16),
+    Jsrxi(IndirectIndexedLabel),
     SbcAx(Ax),
     IncAx(Ax),
     SbcAlx(Alx),
@@ -406,7 +492,7 @@ impl Instruction {
             0x1D => Self::OraAx(Ax(f16(&mut f)?)),
             0x1E => Self::AslAx(Ax(f16(&mut f)?)),
             0x1F => Self::OraAlx(Alx(f24(&mut f)?)),
-            0x20 => Self::Jsr(f16(&mut f)?),
+            0x20 => Self::Jsr(AbsoluteLabel(f16(&mut f)?)),
             0x21 => Self::AndDxi(Dxi(f()?)),
             0x22 => Self::Jsl(f24(&mut f)?),
             0x23 => Self::AndS(S(f()?)),
@@ -450,7 +536,7 @@ impl Instruction {
             0x49 => Self::EorI(I::from_fetcher(&mut f, m?)?),
             0x4A => Self::LsrAc,
             0x4B => Self::Phk,
-            0x4C => Self::Jmp(f16(&mut f)?),
+            0x4C => Self::Jmp(AbsoluteLabel(f16(&mut f)?)),
             0x4D => Self::EorA(A(f16(&mut f)?)),
             0x4E => Self::LsrA(A(f16(&mut f)?)),
             0x4F => Self::EorAl(Al(f24(&mut f)?)),
@@ -472,7 +558,7 @@ impl Instruction {
             0x5F => Self::EorAlx(Alx(f24(&mut f)?)),
             0x60 => Self::Rts,
             0x61 => Self::AdcDxi(Dxi(f()?)),
-            0x62 => Self::Per(f16(&mut f)?),
+            0x62 => Self::Per(RelativeLabel(f16(&mut f)?)),
             0x63 => Self::AdcS(S(f()?)),
             0x64 => Self::StzD(D(f()?)),
             0x65 => Self::AdcD(D(f()?)),
@@ -482,7 +568,7 @@ impl Instruction {
             0x69 => Self::AdcI(I::from_fetcher(&mut f, m?)?),
             0x6A => Self::RorAc,
             0x6B => Self::Rtl,
-            0x6C => Self::Jmpi(f16(&mut f)?),
+            0x6C => Self::Jmpi(IndirectLabel(f16(&mut f)?)),
             0x6D => Self::AdcA(A(f16(&mut f)?)),
             0x6E => Self::RorA(A(f16(&mut f)?)),
             0x6F => Self::AdcAl(Al(f24(&mut f)?)),
@@ -498,13 +584,13 @@ impl Instruction {
             0x79 => Self::AdcAy(Ay(f16(&mut f)?)),
             0x7A => Self::Ply,
             0x7B => Self::Tdc,
-            0x7C => Self::Jmpxi(f16(&mut f)?),
+            0x7C => Self::Jmpxi(IndirectIndexedLabel(f16(&mut f)?)),
             0x7D => Self::AdcAx(Ax(f16(&mut f)?)),
             0x7E => Self::RorAx(Ax(f16(&mut f)?)),
             0x7F => Self::AdcAlx(Alx(f24(&mut f)?)),
             0x80 => Self::Bra(NearLabel(f()?)),
             0x81 => Self::StaDxi(Dxi(f()?)),
-            0x82 => Self::Brl(NearLabel(f()?)),
+            0x82 => Self::Brl(RelativeLabel(f16(&mut f)?)),
             0x83 => Self::StaS(S(f()?)),
             0x84 => Self::StyD(D(f()?)),
             0x85 => Self::StaD(D(f()?)),
@@ -568,7 +654,7 @@ impl Instruction {
             0xBF => Self::LdaAlx(Alx(f24(&mut f)?)),
             0xC0 => Self::CpyI(I::from_fetcher(&mut f, x?)?),
             0xC1 => Self::CmpDxi(Dxi(f()?)),
-            0xC2 => Self::Rep(f()?),
+            0xC2 => Self::Rep(FlagSet(f()?)),
             0xC3 => Self::CmpS(S(f()?)),
             0xC4 => Self::CpyD(D(f()?)),
             0xC5 => Self::CmpD(D(f()?)),
@@ -586,7 +672,7 @@ impl Instruction {
             0xD1 => Self::CmpDiy(Diy(f()?)),
             0xD2 => Self::CmpDi(Di(f()?)),
             0xD3 => Self::CmpSiy(Siy(f()?)),
-            0xD4 => Self::Pei(f()?),
+            0xD4 => Self::Pei(Di(f()?)),
             0xD5 => Self::CmpDx(Dx(f()?)),
             0xD6 => Self::DecDx(Dx(f()?)),
             0xD7 => Self::CmpDily(Dily(f()?)),
@@ -594,13 +680,13 @@ impl Instruction {
             0xD9 => Self::CmpAy(Ay(f16(&mut f)?)),
             0xDA => Self::Phx,
             0xDB => Self::Stp,
-            0xDC => Self::Jmli(f16(&mut f)?),
+            0xDC => Self::Jmli(IndirectLongLabel(f16(&mut f)?)),
             0xDD => Self::CmpAx(Ax(f16(&mut f)?)),
             0xDE => Self::DecAx(Ax(f16(&mut f)?)),
             0xDF => Self::CmpAlx(Alx(f24(&mut f)?)),
             0xE0 => Self::CpxI(I::from_fetcher(&mut f, x?)?),
             0xE1 => Self::SbcDxi(Dxi(f()?)),
-            0xE2 => Self::Sep(f()?),
+            0xE2 => Self::Sep(FlagSet(f()?)),
             0xE3 => Self::SbcS(S(f()?)),
             0xE4 => Self::CpxD(D(f()?)),
             0xE5 => Self::SbcD(D(f()?)),
@@ -618,7 +704,7 @@ impl Instruction {
             0xF1 => Self::SbcDiy(Diy(f()?)),
             0xF2 => Self::SbcDi(Di(f()?)),
             0xF3 => Self::SbcSiy(Siy(f()?)),
-            0xF4 => Self::Pea(f16(&mut f)?),
+            0xF4 => Self::Pea(AbsoluteLabel(f16(&mut f)?)),
             0xF5 => Self::SbcDx(Dx(f()?)),
             0xF6 => Self::IncDx(Dx(f()?)),
             0xF7 => Self::SbcDily(Dily(f()?)),
@@ -626,7 +712,7 @@ impl Instruction {
             0xF9 => Self::SbcAy(Ay(f16(&mut f)?)),
             0xFA => Self::Plx,
             0xFB => Self::Xce,
-            0xFC => Self::Jsrxi(f16(&mut f)?),
+            0xFC => Self::Jsrxi(IndirectIndexedLabel(f16(&mut f)?)),
             0xFD => Self::SbcAx(Ax(f16(&mut f)?)),
             0xFE => Self::IncAx(Ax(f16(&mut f)?)),
             0xFF => Self::SbcAlx(Alx(f24(&mut f)?)),
@@ -893,6 +979,73 @@ impl Instruction {
             Self::SbcAlx(..) => 0xFF,
         };
         OpCode(op)
+    }
+
+    pub const fn arg(&self) -> Option<InstructionArgument> {
+        use Instruction::*;
+        use InstructionArgument as Ia;
+        Some(match *self {
+            Php | AslAc | Phd | Clc | IncAc | Tcs | Plp | RolAc | Pld | Sec | DecAc | Tsc | Rti
+            | Pha | LsrAc | Phk | Cli | Phy | Tcd | Rts | Pla | RorAc | Rtl | Sei | Ply | Tdc
+            | Dey | Txa | Phb | Tya | Txs | Txy | Tay | Tax | Plb | Clv | Tsx | Tyx | Iny | Dex
+            | Wai | Cld | Phx | Stp | Inx | Nop | Xba | Sed | Plx | Xce => return None,
+            Brk(s) | Cop(s) | Wdm(s) => Ia::Signature(s),
+            OraDxi(a) | AndDxi(a) | EorDxi(a) | AdcDxi(a) | StaDxi(a) | LdaDxi(a) | CmpDxi(a)
+            | SbcDxi(a) => Ia::Dxi(a),
+            OraS(a) | AndS(a) | EorS(a) | AdcS(a) | StaS(a) | LdaS(a) | CmpS(a) | SbcS(a) => {
+                Ia::S(a)
+            }
+            TsbD(a) | OraD(a) | AslD(a) | TrbD(a) | BitD(a) | AndD(a) | RolD(a) | EorD(a)
+            | LsrD(a) | StzD(a) | AdcD(a) | RorD(a) | StyD(a) | StaD(a) | StxD(a) | LdyD(a)
+            | LdaD(a) | LdxD(a) | CpyD(a) | CmpD(a) | DecD(a) | CpxD(a) | SbcD(a) | IncD(a) => {
+                Ia::D(a)
+            }
+            OraDil(a) | AndDil(a) | EorDil(a) | AdcDil(a) | StaDil(a) | LdaDil(a) | CmpDil(a)
+            | SbcDil(a) => Ia::Dil(a),
+            OraI(a) | AndI(a) | EorI(a) | AdcI(a) | BitI(a) | LdyI(a) | LdxI(a) | LdaI(a)
+            | CpyI(a) | CmpI(a) | CpxI(a) | SbcI(a) => Ia::I(a),
+            TsbA(a) | OraA(a) | AslA(a) | TrbA(a) | BitA(a) | AndA(a) | RolA(a) | EorA(a)
+            | LsrA(a) | AdcA(a) | RorA(a) | StyA(a) | StaA(a) | StxA(a) | StzA(a) | LdyA(a)
+            | LdaA(a) | LdxA(a) | CpyA(a) | CmpA(a) | DecA(a) | CpxA(a) | SbcA(a) | IncA(a) => {
+                Ia::A(a)
+            }
+            OraAl(a) | AndAl(a) | EorAl(a) | AdcAl(a) | StaAl(a) | LdaAl(a) | CmpAl(a)
+            | SbcAl(a) => Ia::Al(a),
+            Bpl(n) | Bmi(n) | Bvc(n) | Bvs(n) | Bra(n) | Bcc(n) | Bcs(n) | Bne(n) | Beq(n) => {
+                Ia::NearLabel(n)
+            }
+            OraDiy(a) | AndDiy(a) | EorDiy(a) | AdcDiy(a) | StaDiy(a) | LdaDiy(a) | CmpDiy(a)
+            | SbcDiy(a) => Ia::Diy(a),
+            OraDi(a) | AndDi(a) | EorDi(a) | AdcDi(a) | StaDi(a) | LdaDi(a) | CmpDi(a)
+            | SbcDi(a) | Pei(a) => Ia::Di(a),
+            OraSiy(a) | AndSiy(a) | EorSiy(a) | AdcSiy(a) | StaSiy(a) | LdaSiy(a) | CmpSiy(a)
+            | SbcSiy(a) => Ia::Siy(a),
+            OraDx(a) | AslDx(a) | BitDx(a) | AndDx(a) | RolDx(a) | EorDx(a) | LsrDx(a)
+            | StzDx(a) | AdcDx(a) | RorDx(a) | StyDx(a) | StaDx(a) | LdyDx(a) | LdaDx(a)
+            | CmpDx(a) | DecDx(a) | SbcDx(a) | IncDx(a) => Ia::Dx(a),
+            OraDily(a) | AndDily(a) | EorDily(a) | AdcDily(a) | StaDily(a) | LdaDily(a)
+            | CmpDily(a) | SbcDily(a) => Ia::Dily(a),
+            OraAy(a) | AndAy(a) | EorAy(a) | AdcAy(a) | StaAy(a) | LdaAy(a) | LdxAy(a)
+            | CmpAy(a) | SbcAy(a) => Ia::Ay(a),
+            OraAx(a) | AslAx(a) | BitAx(a) | AndAx(a) | RolAx(a) | EorAx(a) | LsrAx(a)
+            | AdcAx(a) | RorAx(a) | StaAx(a) | StzAx(a) | LdyAx(a) | LdaAx(a) | CmpAx(a)
+            | DecAx(a) | SbcAx(a) | IncAx(a) => Ia::Ax(a),
+            OraAlx(a) | AndAlx(a) | EorAlx(a) | AdcAlx(a) | StaAlx(a) | LdaAlx(a) | CmpAlx(a)
+            | SbcAlx(a) => Ia::Alx(a),
+            Jsr(a) | Jmp(a) | Pea(a) => Ia::AbsoluteLabel(a),
+            Jsl(a) | Jml(a) => Ia::LongLabel(a),
+            Mvp(s, d) | Mvn(s, d) => Ia::Move(s, d),
+            Per(r) | Brl(r) => Ia::RelativeLabel(r),
+            Jmpi(i) => Ia::IndirectLabel(i),
+            Jmpxi(i) | Jsrxi(i) => Ia::IndirectIndexedLabel(i),
+            Jmli(i) => Ia::IndirectLongLabel(i),
+            StxDy(a) | LdxDy(a) => Ia::Dy(a),
+            Rep(f) | Sep(f) => Ia::Flags(f),
+        })
+    }
+
+    pub fn size(&self) -> u8 {
+        self.arg().map(|arg| arg.size() + 1).unwrap_or(1)
     }
 }
 

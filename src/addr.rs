@@ -1,6 +1,6 @@
 use bytemuck::*;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Zeroable)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Zeroable)]
 pub struct Addr {
     pub bank: u8,
     pub addr: u16,
@@ -46,6 +46,14 @@ impl Addr {
         let old = *self;
         *self = self.add16(val);
         old
+    }
+
+    pub const fn add24(self, val: u32) -> Self {
+        Self::from_u32(self.to_u32().wrapping_add(val))
+    }
+
+    pub const fn sub24(self, val: u32) -> Self {
+        Self::from_u32(self.to_u32().wrapping_sub(val))
     }
 }
 

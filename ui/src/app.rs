@@ -1,6 +1,8 @@
 use eframe::egui;
 
-use crate::{error::Errors, project::AppProject, shortcuts::Shortcuts};
+use crate::{
+    disassembly_view::DisassemblyView, error::Errors, project::AppProject, shortcuts::Shortcuts,
+};
 
 pub const NAME: &str = "Solar Magic";
 pub const DESCRIPTION: &str =
@@ -9,18 +11,22 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct App {
     pub about_window: bool,
+    pub cart_info_window: bool,
     pub project: AppProject,
     pub shortcuts: Shortcuts,
     pub errors: Errors,
+    pub disassembly_view: DisassemblyView,
 }
 
 impl App {
     pub fn new(args: crate::Args, ctx: &eframe::CreationContext) -> Self {
         let mut slf = Self {
             about_window: false,
+            cart_info_window: false,
             project: AppProject::new(),
             shortcuts: Default::default(),
             errors: Errors::new(),
+            disassembly_view: DisassemblyView::new(),
         };
         if let Some(path) = args.rom_path {
             slf.project.load(&ctx.egui_ctx, path);

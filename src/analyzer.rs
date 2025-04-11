@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::{
     addr::Addr,
@@ -347,6 +347,10 @@ impl CallStack {
     pub fn pop(&mut self) -> Option<Addr> {
         self.items.pop()
     }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -357,14 +361,14 @@ pub struct Head {
 
 #[derive(Clone)]
 pub struct Analyzer {
-    code_annotations: HashMap<Addr, HashMap<CallStack, AnnotatedInstruction>>,
+    pub code_annotations: BTreeMap<Addr, HashMap<CallStack, AnnotatedInstruction>>,
     heads: Vec<Head>,
 }
 
 impl Analyzer {
     pub fn new() -> Self {
         Self {
-            code_annotations: HashMap::new(),
+            code_annotations: BTreeMap::new(),
             heads: vec![],
         }
     }
@@ -812,8 +816,8 @@ impl Analyzer {
         ) else {
             return Err(());
         };
-        println!("<{:x?}>", call_stack.items);
-        println!("{instr_pc} : {instr:x?}");
+        // println!("<{:x?}>", call_stack.items);
+        // println!("{instr_pc} : {instr:x?}");
 
         match xf {
             TBool::True => {
@@ -872,7 +876,7 @@ impl Analyzer {
             Instruction::OraAlx(alx) => todo!(),
             Instruction::Jsr(dst) => {
                 ctx.stack.push16(ctx.pc.addr.wrapping_sub(1).into());
-                ctx.pc.addr = *dst;
+                ctx.pc.addr = dst.0;
                 call_stack.push(instr_pc);
             }
             Instruction::AndDxi(dxi) => todo!(),
@@ -935,7 +939,7 @@ impl Analyzer {
             Instruction::EorI(i) => todo!(),
             Instruction::LsrAc => self.instr_lsrimm(&mut ctx),
             Instruction::Phk => ctx.stack.push(ctx.pc.bank.into()),
-            Instruction::Jmp(dst) => ctx.pc.addr = *dst,
+            Instruction::Jmp(dst) => ctx.pc.addr = dst.0,
             Instruction::EorA(a) => {
                 let addr = ctx.resolve_a(cart, a);
                 self.instr_eor(cart, &mut ctx, addr);
@@ -1223,7 +1227,7 @@ impl Analyzer {
                 self.instr_cmpimm(&mut ctx, y, (*i).into())
             }
             Instruction::CmpDxi(dxi) => todo!(),
-            Instruction::Rep(p) => ctx.p &= !*p,
+            Instruction::Rep(p) => ctx.p &= !p.0,
             Instruction::CmpS(s) => todo!(),
             Instruction::CpyD(d) => todo!(),
             Instruction::CmpD(d) => todo!(),
@@ -1267,7 +1271,7 @@ impl Analyzer {
             Instruction::CmpAlx(alx) => todo!(),
             Instruction::CpxI(i) => todo!(),
             Instruction::SbcDxi(dxi) => todo!(),
-            Instruction::Sep(p) => ctx.p |= *p,
+            Instruction::Sep(p) => ctx.p |= p.0,
             Instruction::SbcS(s) => todo!(),
             Instruction::CpxD(d) => todo!(),
             Instruction::SbcD(d) => todo!(),

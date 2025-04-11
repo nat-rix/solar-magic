@@ -3,9 +3,11 @@ use eframe::egui;
 impl crate::app::App {
     pub fn overlay(&mut self, ctx: &egui::Context) {
         self.about_window(ctx);
+        self.show_cart_info(ctx);
         egui::TopBottomPanel::top("menu-panel").show(ctx, |ui| {
             self.menu(ui);
         });
+        self.show_disassembly(ctx);
     }
 
     pub fn about_window(&mut self, ctx: &egui::Context) {
@@ -34,6 +36,10 @@ impl crate::app::App {
                 if ui.add(open_btn).clicked() {
                     self.project.start_file_picker();
                 }
+                if ui.button("Show Cartridge Info").clicked() {
+                    self.cart_info_window ^= true;
+                }
+                ui.separator();
                 if ui.button("Exit").clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }

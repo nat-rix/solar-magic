@@ -55,6 +55,10 @@ impl Rom {
     pub fn checksum(&self) -> u16 {
         self.data.iter().fold(0, |a, b| a.wrapping_add(*b as u16))
     }
+
+    pub fn len(&self) -> u32 {
+        self.data.len() as _
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -399,6 +403,14 @@ impl Cart {
         } else {
             MemoryLocation::Cart(self.map(addr))
         }
+    }
+
+    pub fn reverse_map_rom(&self, rom_addr: u32) -> Option<Addr> {
+        self.mapping
+            .map
+            .iter()
+            .position(|item| item == &CartMemoryLocation::Rom(rom_addr & !0x1fff))
+            .map(|i| Addr::from_u32((i << 13) as u32 | (rom_addr & 0x1fff)))
     }
 
     pub fn read_rom(&self, addr: Addr) -> Option<u8> {

@@ -9,7 +9,7 @@ use solar_magic::{analyzer::Analyzer, cart::Cart, original_cart::OriginalCart};
 pub struct AppProject {
     picker: Option<JoinHandle<Option<PathBuf>>>,
     loader: Option<JoinHandle<Result<Project, std::io::Error>>>,
-    project: Option<Project>,
+    pub project: Option<Project>,
 }
 
 impl AppProject {
@@ -58,8 +58,8 @@ impl AppProject {
 
 #[derive(Clone)]
 pub struct Project {
-    smw: OriginalCart,
-    analyzer: Analyzer,
+    pub smw: OriginalCart,
+    pub analyzer: Analyzer,
 }
 
 impl Project {

@@ -14,6 +14,7 @@ pub struct OriginalCart {
     pub cart: Cart,
     pub header: Header,
     pub edition: Edition,
+    pub crc32: u32,
 }
 
 impl OriginalCart {
@@ -38,6 +39,7 @@ impl OriginalCart {
             cart,
             header,
             edition,
+            crc32,
         })
     }
 }
