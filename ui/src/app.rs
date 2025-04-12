@@ -1,10 +1,12 @@
+use eframe::egui;
+
 use crate::{
     disassembly_view::DisassemblyView, error::Errors, project::AppProject, shortcuts::Shortcuts,
 };
 
 pub const NAME: &str = "Solar Magic";
 pub const DESCRIPTION: &str =
-    "is an hack editor for the game Super Mario World for the Super Nintendo Entertainment System";
+    "is a  Level Editor for the game Super Mario World on the Super Nintendo Entertainment System.";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct App {
@@ -27,6 +29,7 @@ impl App {
             disassembly_view: DisassemblyView::new(),
         };
         ctx.egui_ctx.set_style(crate::theme::get_style());
+        crate::fonts::set_fonts(&ctx.egui_ctx);
         if let Some(path) = args.rom_path {
             slf.project.load(&ctx.egui_ctx, path);
         }

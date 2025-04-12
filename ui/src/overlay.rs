@@ -1,3 +1,5 @@
+use eframe::egui;
+
 impl crate::app::App {
     pub fn overlay(&mut self, ctx: &egui::Context) {
         self.about_window(ctx);
@@ -6,12 +8,6 @@ impl crate::app::App {
             self.menu(ui);
         });
         self.show_disassembly(ctx);
-        egui::Window::new("settings-window").show(ctx, |ui| {
-            let ctx = ui.ctx().clone();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ctx.settings_ui(ui);
-            })
-        });
     }
 
     pub fn about_window(&mut self, ctx: &egui::Context) {

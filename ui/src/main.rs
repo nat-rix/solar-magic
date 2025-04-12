@@ -4,6 +4,7 @@ mod app;
 mod cart_info;
 mod disassembly_view;
 mod error;
+mod fonts;
 mod overlay;
 mod project;
 mod shortcuts;

@@ -1,8 +1,11 @@
+use eframe::egui;
+
 pub fn get_style() -> egui::Style {
     default_themes::dark()
 }
 
 mod default_themes {
+    use eframe::egui;
     use egui::{
         Align, CornerRadius,
         FontFamily::*,
@@ -25,7 +28,8 @@ mod default_themes {
             spread: 1,
             color: rgba(0x00_00_00_90),
         };
-        let bg = rgba(0x10_10_10_FF);
+        let bg = rgba(0x1D_19_16_FF);
+        let bg_faint = rgba(0x2E_28_23_FF);
         let primary = rgba(0x4D_75_50_FF);
         let primary_font = primary.gamma_multiply(3.0);
         Style {
@@ -44,19 +48,9 @@ mod default_themes {
             wrap_mode: None,
             spacing: Spacing {
                 item_spacing: Vec2::new(10.0, 4.0),
-                window_margin: Margin {
-                    left: 8,
-                    right: 8,
-                    top: 8,
-                    bottom: 8,
-                },
+                window_margin: Margin::same(8),
                 button_padding: Vec2::new(6.0, 2.0),
-                menu_margin: Margin {
-                    left: 8,
-                    right: 8,
-                    top: 8,
-                    bottom: 8,
-                },
+                menu_margin: Margin::same(10),
                 indent: 18.0,
                 interact_size: Vec2::new(40.0, 18.0),
                 slider_width: 100.0,
@@ -68,8 +62,8 @@ mod default_themes {
                 icon_spacing: 7.0,
                 default_area_size: Vec2::new(600.0, 400.0),
                 tooltip_width: 500.0,
-                menu_width: 400.0,
-                menu_spacing: 4.0,
+                menu_width: 600.0,
+                menu_spacing: 8.0,
                 indent_ends_with_horizontal_line: false,
                 combo_height: 200.0,
                 scroll: ScrollStyle {
@@ -113,7 +107,7 @@ mod default_themes {
                     },
                     inactive: WidgetVisuals {
                         bg_fill: primary,
-                        weak_bg_fill: bg,
+                        weak_bg_fill: bg_faint,
                         bg_stroke: Stroke::new(0.0, rgba(0x00_00_00_00)),
                         corner_radius: CornerRadius::same(0),
                         fg_stroke: Stroke::new(2.0, rgba(0xE0_F0_D0_FF)),
@@ -159,12 +153,7 @@ mod default_themes {
                 window_fill: bg,
                 window_stroke: Stroke::new(1.0, rgba(0x3C_3C_3C_FF)),
                 window_highlight_topmost: true,
-                menu_corner_radius: CornerRadius {
-                    nw: 6,
-                    ne: 6,
-                    sw: 6,
-                    se: 6,
-                },
+                menu_corner_radius: CornerRadius::same(0),
                 panel_fill: bg,
                 popup_shadow: shadow,
                 resize_corner_size: 15.0,

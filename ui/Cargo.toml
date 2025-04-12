@@ -2,15 +2,15 @@
 name = "solar-magic-ui"
 version = "0.1.0"
 edition = "2024"
+resolver = "2"
 
 [dependencies.solar-magic]
 path = ".."
 
 [dependencies.eframe]
 version = "0.31"
-
-[dependencies.egui]
-version = "0.31"
+default-features = false
+features = ["accesskit", "glow", "wgpu", "wayland"]
 
 [dependencies.clap]
 version = "4.5"

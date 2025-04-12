@@ -1,3 +1,4 @@
+use eframe::egui;
 use solar_magic::addr::Addr;
 
 use crate::project::Project;
