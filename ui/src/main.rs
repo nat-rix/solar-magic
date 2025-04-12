@@ -1,5 +1,4 @@
-#![recursion_limit = "256"]
-
+mod addr_widget;
 mod app;
 mod cart_info;
 mod disassembly_view;

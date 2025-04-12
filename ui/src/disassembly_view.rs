@@ -92,6 +92,20 @@ impl DisassemblyView {
             ui.end_row();
         }
     }
+
+    fn show_sidepanel(&mut self, project: &Project, ui: &mut egui::Ui) {
+        ui.collapsing("Position", |ui| {
+            egui::Grid::new("disassembler-sidepanel-position-grid")
+                .striped(true)
+                .num_columns(2)
+                .show(ui, |ui| {
+                    ui.strong("Address:");
+                    ui.add(crate::addr_widget::addr_drag(&mut self.start_addr));
+                    ui.end_row();
+                });
+        });
+        // TODO
+    }
 }
 
 impl crate::app::App {
@@ -103,5 +117,23 @@ impl crate::app::App {
                 ui.centered_and_justified(|ui| ui.strong("no cartridge loaded yet"));
             }
         });
+        let Some(project) = &self.project.project else {
+            return;
+        };
+        egui::SidePanel::right("disassembly-sidepanel")
+            .resizable(true)
+            .width_range(..)
+            .max_width(f32::INFINITY)
+            .show(ctx, |ui| {
+                ui.allocate_new_ui(
+                    egui::UiBuilder::default()
+                        .layout(egui::Layout::top_down_justified(egui::Align::Min)),
+                    |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            self.disassembly_view.show_sidepanel(project, ui);
+                        });
+                    },
+                );
+            });
     }
 }

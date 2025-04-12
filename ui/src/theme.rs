@@ -63,7 +63,7 @@ mod default_themes {
                 default_area_size: Vec2::new(600.0, 400.0),
                 tooltip_width: 500.0,
                 menu_width: 600.0,
-                menu_spacing: 8.0,
+                menu_spacing: 5.0,
                 indent_ends_with_horizontal_line: false,
                 combo_height: 200.0,
                 scroll: ScrollStyle {
