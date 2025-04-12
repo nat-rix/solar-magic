@@ -1,5 +1,3 @@
-use eframe::egui;
-
 use crate::{
     disassembly_view::DisassemblyView, error::Errors, project::AppProject, shortcuts::Shortcuts,
 };
@@ -28,6 +26,7 @@ impl App {
             errors: Errors::new(),
             disassembly_view: DisassemblyView::new(),
         };
+        ctx.egui_ctx.set_style(crate::theme::get_style());
         if let Some(path) = args.rom_path {
             slf.project.load(&ctx.egui_ctx, path);
         }

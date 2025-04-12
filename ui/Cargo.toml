@@ -9,6 +9,9 @@ path = ".."
 [dependencies.eframe]
 version = "0.31"
 
+[dependencies.egui]
+version = "0.31"
+
 [dependencies.clap]
 version = "4.5"
 features = ["derive"]

@@ -1,9 +1,8 @@
-use eframe::egui;
 use solar_magic::addr::Addr;
 
 use crate::project::Project;
 
-const SCROLL_SPEED: f32 = 0.5;
+const SCROLL_SPEED_FACTOR: f32 = 0.1;
 
 pub struct DisassemblyView {
     start_addr: Addr,
@@ -20,8 +19,9 @@ impl DisassemblyView {
 
     fn show_grid(&mut self, project: &Project, ui: &mut egui::Ui) {
         if ui.ui_contains_pointer() {
+            let scroll_speed = ui.ctx().options(|opt| opt.line_scroll_speed) * SCROLL_SPEED_FACTOR;
             let delta =
-                ui.input_mut(|inp| core::mem::take(&mut inp.smooth_scroll_delta.y)) * SCROLL_SPEED;
+                ui.input_mut(|inp| core::mem::take(&mut inp.smooth_scroll_delta.y)) * scroll_speed;
             self.scroll_offset -= delta;
             if self.scroll_offset < -1.0 {
                 let steps = -self.scroll_offset as u32;
@@ -64,7 +64,8 @@ impl DisassemblyView {
             if !ui.is_rect_visible(ui.cursor()) {
                 break;
             }
-            ui.weak(addr.to_string());
+
+            ui.label(egui::RichText::new(addr.to_string()).monospace().weak());
 
             let opt_annotation = project
                 .analyzer

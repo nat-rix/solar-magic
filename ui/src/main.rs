@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 mod app;
 mod cart_info;
 mod disassembly_view;
@@ -5,6 +7,7 @@ mod error;
 mod overlay;
 mod project;
 mod shortcuts;
+mod theme;
 
 use clap::Parser;
 use std::path::PathBuf;
