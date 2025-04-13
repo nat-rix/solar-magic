@@ -1,4 +1,7 @@
-use eframe::egui;
+use eframe::egui::{
+    self,
+    ahash::{HashMap, HashMapExt},
+};
 use solar_magic::{
     addr::Addr,
     analyzer::AnnotatedInstruction,
@@ -48,9 +51,64 @@ impl From<Addr> for Lit {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct JumpList {
+    buffer: Vec<Addr>,
+    len: usize,
+}
+
+impl JumpList {
+    pub fn new(addr: Addr) -> Self {
+        Self {
+            buffer: vec![addr],
+            len: 0,
+        }
+    }
+
+    pub fn jump(&mut self, src: Addr, dst: Addr) {
+        self.buffer.truncate(self.len);
+        if !self.buffer.last().is_some_and(|v| v == &src) {
+            self.buffer.push(src);
+            self.len += 1;
+        }
+        if !self.buffer.last().is_some_and(|v| v == &dst) {
+            self.buffer.push(dst);
+            self.len += 1;
+        }
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.len > 0
+    }
+
+    pub fn undo(&mut self, cur: Addr) -> Option<Addr> {
+        loop {
+            self.len = self.len.checked_sub(1)?;
+            let res = self.buffer.get(self.len).copied();
+            if res.is_some_and(|res| res == cur) {
+                continue;
+            }
+            break res;
+        }
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.len + 1 < self.buffer.len()
+    }
+
+    pub fn redo(&mut self) -> Option<Addr> {
+        let old_len = self.len;
+        self.len = (self.len + 1).min(self.buffer.len());
+        (old_len != self.len)
+            .then(|| self.buffer.get(self.len).copied())
+            .flatten()
+    }
+}
+
 pub struct DisassemblyView {
     start_addr: Addr,
     scroll_offset: f32,
+    jump_list: JumpList,
 }
 
 impl DisassemblyView {
@@ -58,6 +116,7 @@ impl DisassemblyView {
         Self {
             start_addr: Addr::new(0, 0x8000),
             scroll_offset: 0.0,
+            jump_list: Default::default(),
         }
     }
 
@@ -79,12 +138,39 @@ impl DisassemblyView {
         }
 
         ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
-            egui::Grid::new("disassembly-grid")
-                .num_columns(4)
-                .striped(true)
-                .show(ui, |ui| {
-                    self.show_grid_content(project, ui);
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    let btn = egui::Button::new("");
+                    if ui.add_enabled(self.jump_list.can_undo(), btn).clicked() {
+                        if let Some(dst) = self.jump_list.undo(self.start_addr) {
+                            self.start_addr = dst;
+                        }
+                    }
+                    let btn = egui::Button::new("");
+                    if ui.add_enabled(self.jump_list.can_redo(), btn).clicked() {
+                        if let Some(dst) = self.jump_list.redo() {
+                            self.start_addr = dst;
+                        }
+                    }
+                    let old_start_addr = self.start_addr;
+                    ui.add(
+                        crate::addr_widget::addr_drag(&mut self.start_addr)
+                            .update_while_editing(false),
+                    );
+                    if old_start_addr.to_u32().abs_diff(self.start_addr.to_u32()) > 0x100 {
+                        self.jump_list.jump(old_start_addr, self.start_addr);
+                    }
                 });
+                ui.separator();
+                egui_extras::TableBuilder::new(ui)
+                    .columns(egui_extras::Column::auto(), 3)
+                    .column(egui_extras::Column::remainder())
+                    .vscroll(false)
+                    .striped(true)
+                    .body(|mut body| {
+                        self.show_grid_content(project, &mut body);
+                    });
+            });
         });
     }
 
@@ -104,39 +190,67 @@ impl DisassemblyView {
         });
     }
 
-    fn show_grid_content(&mut self, project: &Project, ui: &mut egui::Ui) {
-        ui.expand_to_include_rect(ui.clip_rect());
+    fn show_grid_content(&mut self, project: &Project, body: &mut egui_extras::TableBody) {
+        // ui.expand_to_include_rect(ui.clip_rect());
         let mut addr = self.start_addr;
+        let mut grid_items = HashMap::new();
+        let mut jumps = vec![];
         loop {
+            let ui = body.ui_mut();
             if !ui.is_rect_visible(ui.cursor()) {
                 break;
             }
 
-            ui.label(egui::RichText::new(addr.to_string()).monospace().weak());
+            body.row(20.0, |mut row| {
+                row.col(|ui| {
+                    ui.label(egui::RichText::new(addr.to_string()).monospace().weak());
+                    grid_items.insert(addr, ui.cursor().max);
+                });
 
-            let opt_annotation = project
-                .analyzer
-                .code_annotations
-                .get(&addr)
-                .and_then(|v| v.iter().min_by_key(|(k, _)| k.len()));
-            if let Some((_call_stack, instr)) = opt_annotation {
-                let opcode = instr.instruction.opcode();
-                let instr_size = instr.instruction.size();
-                let arg = instr.instruction.arg();
+                let opt_annotation = project
+                    .analyzer
+                    .code_annotations
+                    .get(&addr)
+                    .and_then(|v| v.iter().min_by_key(|(k, _)| k.len()));
+                if let Some((_call_stack, instr)) = opt_annotation {
+                    let opcode = instr.instruction.opcode();
+                    let instr_size = instr.instruction.size();
+                    let arg = instr.instruction.arg();
 
-                Self::show_bytes(project, (0..instr_size).map(|i| addr.add16(i.into())), ui);
+                    row.col(|ui| {
+                        Self::show_bytes(
+                            project,
+                            (0..instr_size).map(|i| addr.add16(i.into())),
+                            ui,
+                        );
+                    });
 
-                self.show_instr(arg, opcode, ui);
+                    row.col(|ui| {
+                        self.show_instr(arg, opcode, ui);
+                    });
 
-                self.show_helpers(project, instr, arg, addr, ui);
+                    row.col(|ui| {
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                            self.show_helpers(project, instr, arg, addr, &mut jumps, ui);
+                        });
+                    });
 
-                addr = addr.add24(instr_size.into());
-            } else {
-                Self::show_bytes(project, [addr], ui);
-                ui.label("<data byte>");
-                addr = addr.add24(1);
-            }
-            ui.end_row();
+                    addr = addr.add24(instr_size.into());
+                } else {
+                    row.col(|ui| {
+                        Self::show_bytes(project, [addr], ui);
+                    });
+                    row.col(|ui| {
+                        ui.label("<data byte>");
+                    });
+                    row.col(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.add_space(ui.available_width());
+                        });
+                    });
+                    addr = addr.add24(1);
+                }
+            });
         }
     }
 
@@ -273,12 +387,12 @@ impl DisassemblyView {
         };
         let btn = egui::Button::new(egui::RichText::new(format!(" {addr}")).monospace());
         if ui.add(btn).clicked() {
+            self.jump_list.jump(self.start_addr, addr);
             self.start_addr = addr;
         }
     }
 
     fn show_flags_helper(&mut self, flags: u8, ui: &mut egui::Ui) {
-        use solar_magic::pf::*;
         let names = ["C", "Z", "I", "D", "X", "M", "V", "N"];
         let text = (0..8)
             .filter(|i| (flags >> i) & 1 != 0)
@@ -294,6 +408,7 @@ impl DisassemblyView {
         instr: &AnnotatedInstruction,
         arg: Option<InstructionArgument>,
         addr: Addr,
+        jumps: &mut Vec<(Addr, Addr)>,
         ui: &mut egui::Ui,
     ) {
         let Some(arg) = arg else {
@@ -335,14 +450,25 @@ impl DisassemblyView {
             InstructionArgument::S(a) => todo!(),
             InstructionArgument::Siy(a) => todo!(),
             InstructionArgument::I(a) => (),
-            InstructionArgument::NearLabel(a) => self.show_addr_helper(project, a.take(addr), ui),
+            InstructionArgument::NearLabel(a) => {
+                let dst = a.take(addr);
+                jumps.push((addr, dst));
+                self.show_addr_helper(project, dst, ui)
+            }
             InstructionArgument::RelativeLabel(a) => {
-                self.show_addr_helper(project, a.take(addr), ui)
+                let dst = a.take(addr);
+                jumps.push((addr, dst));
+                self.show_addr_helper(project, dst, ui)
             }
             InstructionArgument::AbsoluteLabel(a) => {
-                self.show_addr_helper(project, a.take(addr), ui)
+                let dst = a.take(addr);
+                jumps.push((addr, dst));
+                self.show_addr_helper(project, dst, ui)
             }
-            InstructionArgument::LongLabel(a) => self.show_addr_helper(project, a, ui),
+            InstructionArgument::LongLabel(a) => {
+                jumps.push((addr, a));
+                self.show_addr_helper(project, a, ui)
+            }
             InstructionArgument::IndirectLabel(a) => todo!(),
             InstructionArgument::IndirectIndexedLabel(a) => todo!(),
             InstructionArgument::IndirectLongLabel(a) => todo!(),
