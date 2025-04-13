@@ -105,6 +105,18 @@ impl NearLabel {
     }
 }
 
+impl RelativeLabel {
+    pub fn take(&self, pc: Addr) -> Addr {
+        pc.add16(self.0.wrapping_add(3))
+    }
+}
+
+impl AbsoluteLabel {
+    pub fn take(&self, pc: Addr) -> Addr {
+        Addr::new(pc.bank, self.0)
+    }
+}
+
 fn f16(f: &mut impl FnMut() -> Option<u8>) -> Option<u16> {
     Some(u16::from_le_bytes([f()?, f()?]))
 }

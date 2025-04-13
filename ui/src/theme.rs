@@ -1,10 +1,16 @@
 use eframe::egui;
 
+pub const fn rgba(v: u32) -> egui::Color32 {
+    let [r, g, b, a] = v.to_be_bytes();
+    egui::Color32::from_rgba_premultiplied(r, g, b, a)
+}
+
 pub fn get_style() -> egui::Style {
     default_themes::dark()
 }
 
 mod default_themes {
+    use super::rgba;
     use eframe::egui;
     use egui::{
         Align, CornerRadius,
@@ -15,11 +21,6 @@ mod default_themes {
             TextCursorStyle, WidgetVisuals,
         },
     };
-
-    const fn rgba(v: u32) -> egui::Color32 {
-        let [r, g, b, a] = v.to_be_bytes();
-        egui::Color32::from_rgba_premultiplied(r, g, b, a)
-    }
 
     pub fn dark() -> Style {
         let shadow = Shadow {
@@ -44,7 +45,7 @@ mod default_themes {
                 (TextStyle::Heading, FontId::new(20.0, Proportional)),
             ]
             .into(),
-            drag_value_text_style: TextStyle::Button,
+            drag_value_text_style: TextStyle::Monospace,
             wrap_mode: None,
             spacing: Spacing {
                 item_spacing: Vec2::new(10.0, 4.0),

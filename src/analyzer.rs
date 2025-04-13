@@ -129,7 +129,7 @@ impl Context {
         Some(())
     }
 
-    pub fn read16(&mut self, cart: &Cart, mut addr: AddrModeRes) -> Option<TU16> {
+    pub fn read16(&self, cart: &Cart, mut addr: AddrModeRes) -> Option<TU16> {
         let lo = self.read8(cart, addr)?;
         addr.incr();
         let hi = self.read8(cart, addr)?;
@@ -143,7 +143,7 @@ impl Context {
         self.write8(cart, addr, hi);
     }
 
-    pub fn read24(&mut self, cart: &Cart, mut addr: AddrModeRes) -> Option<TU24> {
+    pub fn read24(&self, cart: &Cart, mut addr: AddrModeRes) -> Option<TU24> {
         let a16 = self.read16(cart, addr)?;
         addr.incr();
         let bank = self.read8(cart, addr)?;
@@ -171,7 +171,7 @@ impl Context {
         }
     }
 
-    pub fn read_sized(&mut self, cart: &Cart, addr: AddrModeRes, is8: TBool) -> TUnknown {
+    pub fn read_sized(&self, cart: &Cart, addr: AddrModeRes, is8: TBool) -> TUnknown {
         match is8 {
             TBool::True => self.read8(cart, addr.addr).unwrap_or(TU8::UNKNOWN).into(),
             TBool::False => self.read16(cart, addr).unwrap_or(TU16::UNKNOWN).into(),
@@ -179,11 +179,11 @@ impl Context {
         }
     }
 
-    pub fn read_sized_m(&mut self, cart: &Cart, addr: AddrModeRes) -> TUnknown {
+    pub fn read_sized_m(&self, cart: &Cart, addr: AddrModeRes) -> TUnknown {
         self.read_sized(cart, addr, self.mf())
     }
 
-    pub fn read_sized_x(&mut self, cart: &Cart, addr: AddrModeRes) -> TUnknown {
+    pub fn read_sized_x(&self, cart: &Cart, addr: AddrModeRes) -> TUnknown {
         self.read_sized(cart, addr, self.xf())
     }
 
@@ -229,7 +229,7 @@ impl Context {
         }
     }
 
-    pub fn resolve_di(&mut self, cart: &Cart, di: &am::Di) -> AddrModeRes {
+    pub fn resolve_di(&self, cart: &Cart, di: &am::Di) -> AddrModeRes {
         let addr = self
             .read16(cart, self.resolve_d(cart, &am::D(di.0)))
             .unwrap_or(TU16::UNKNOWN);
@@ -239,7 +239,7 @@ impl Context {
         }
     }
 
-    pub fn resolve_dily(&mut self, cart: &Cart, dily: &am::Dily) -> AddrModeRes {
+    pub fn resolve_dily(&self, cart: &Cart, dily: &am::Dily) -> AddrModeRes {
         let addr = self
             .read24(cart, self.resolve_d(cart, &am::D(dily.0)))
             .unwrap_or(TU24::UNKNOWN);
@@ -330,8 +330,8 @@ impl Context {
 #[derive(Debug, Clone)]
 pub struct AnnotatedInstruction {
     pub instruction: Instruction,
-    pre: Context,
-    dst: Vec<Addr>,
+    pub pre: Context,
+    pub dst: Vec<Addr>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
