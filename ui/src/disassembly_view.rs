@@ -53,6 +53,20 @@ impl From<Addr> for Lit {
     }
 }
 
+fn calculate_visually_distinct_color(i: u32) -> egui::Color32 {
+    // This will yield a sequence of following hues:
+    // 1/2, 1/4, 3/4, 1/8, 5/8, 3/8, 7/8, 1/16, ...
+    // yeah, i dunno why i ended up doing this subnormal float clusterfuck...
+    const SEQF32: f32 = f32::from_bits(253 << 23);
+    egui::epaint::Hsva {
+        h: f32::from_bits(i.reverse_bits() >> 9) * SEQF32,
+        s: 0.7,
+        v: 0.6,
+        a: 1.0,
+    }
+    .into()
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct JumpList {
     buffer: Vec<Addr>,
@@ -158,7 +172,7 @@ impl DisassemblyView {
                 });
                 ui.separator();
                 let mut grid_items = HashMap::new();
-                let mut jumps = vec![];
+                let mut jumps = HashMap::new();
                 let mut colx = None;
                 let old_remains = ui.available_rect_before_wrap();
                 egui_extras::TableBuilder::new(ui)
@@ -182,26 +196,27 @@ impl DisassemblyView {
                     let painter = ui.painter();
                     let x = rect.min.x;
                     let mut jump_ys: Vec<_> = jumps
-                        .iter()
-                        .filter_map(|(src, dst)| {
-                            grid_items
-                                .get(src)
-                                .copied()
-                                .and_then(|s| grid_items.get(dst).copied().map(|d| (s, d)))
+                        .into_iter()
+                        .filter_map(|(dst, srcs)| {
+                            let dst = grid_items.get(&dst).copied()?;
+                            let srcs: Vec<_> = srcs
+                                .into_iter()
+                                .filter_map(|src| grid_items.get(&src).copied())
+                                .collect();
+                            let srcmin = srcs.iter().copied().min_by(f32::total_cmp)?;
+                            let srcmax = srcs.iter().copied().max_by(f32::total_cmp)?;
+                            Some((srcs, dst, srcmin.min(dst), srcmax.max(dst)))
                         })
                         .collect();
-                    jump_ys
-                        .sort_by(|(s1, d1), (s2, d2)| (s1 - d1).abs().total_cmp(&(s2 - d2).abs()));
+                    jump_ys.sort_unstable_by(|(_, d1, a1, b1), (.., d2, a2, b2)| {
+                        (b1 - a1).total_cmp(&(b2 - a2)).then(d1.total_cmp(d2))
+                    });
                     let mut layers: Vec<usize> = vec![];
-                    for (i, (s, d)) in jump_ys.iter().copied().enumerate() {
-                        let (ymin1, ymax1) = (s.min(d), s.max(d));
+                    for (s, d, ymin1, ymax1) in &jump_ys {
                         let ly = jump_ys
                             .iter()
                             .zip(&layers)
-                            .filter(|((s, d), _)| {
-                                let (ymin2, ymax2) = (s.min(*d), s.max(*d));
-                                ymin1 <= ymax2 && ymax1 >= ymin2
-                            })
+                            .filter(|((.., ymin2, ymax2), _)| ymin1 <= ymax2 && ymax1 >= ymin2)
                             .map(|(_, ly)| *ly)
                             .max()
                             .map(|ly| ly + 1)
@@ -209,26 +224,28 @@ impl DisassemblyView {
                         layers.push(ly);
                         let x2 =
                             x + ly as f32 * GRID_JUMPARROW_INDENT + GRID_JUMPARROW_INDENT_START;
-                        let color = egui::Color32::from(egui::epaint::Hsva {
-                            h: i as f32 / jump_ys.len() as f32,
-                            s: 0.6,
-                            v: 0.8,
-                            a: 1.0,
-                        });
+                        let color = calculate_visually_distinct_color(ly as _);
+
+                        for y in s.iter().chain([d]).copied() {
+                            if y == *ymin1 || y == *ymax1 {
+                                continue;
+                            }
+                            painter.hline(x..=x2, y, (GRID_JUMPARROW_WIDTH, color));
+                        }
                         painter.line(
                             vec![
-                                egui::Pos2::new(x, s),
-                                egui::Pos2::new(x2, s),
-                                egui::Pos2::new(x2, d),
-                                egui::Pos2::new(x, d),
+                                egui::Pos2::new(x, *ymin1),
+                                egui::Pos2::new(x2, *ymin1),
+                                egui::Pos2::new(x2, *ymax1),
+                                egui::Pos2::new(x, *ymax1),
                             ],
                             (GRID_JUMPARROW_WIDTH, color),
                         );
                         painter.add(egui::epaint::PathShape {
                             points: vec![
-                                egui::Pos2::new(x - 6.0, d),
-                                egui::Pos2::new(x + 1.0, d + 6.0),
-                                egui::Pos2::new(x + 1.0, d - 6.0),
+                                egui::Pos2::new(x - 6.0, *d),
+                                egui::Pos2::new(x + 1.0, *d + 6.0),
+                                egui::Pos2::new(x + 1.0, *d - 6.0),
                             ],
                             closed: true,
                             fill: color,
@@ -261,7 +278,7 @@ impl DisassemblyView {
         project: &Project,
         body: &mut egui_extras::TableBody,
         grid_items: &mut HashMap<Addr, f32>,
-        jumps: &mut Vec<(Addr, Addr)>,
+        jumps: &mut HashMap<Addr, Vec<Addr>>,
         colx: &mut Option<f32>,
     ) {
         let mut addr = self.start_addr;
@@ -491,12 +508,13 @@ impl DisassemblyView {
         instr: &AnnotatedInstruction,
         arg: Option<InstructionArgument>,
         addr: Addr,
-        jumps: &mut Vec<(Addr, Addr)>,
+        jumps: &mut HashMap<Addr, Vec<Addr>>,
         ui: &mut egui::Ui,
     ) {
         let Some(arg) = arg else {
             return;
         };
+        let mut add_jump = |s, d| jumps.entry(d).or_insert(vec![]).push(s);
         let ctx = &instr.pre;
         let cart = &project.smw.cart;
         match arg {
@@ -535,21 +553,21 @@ impl DisassemblyView {
             InstructionArgument::I(a) => (),
             InstructionArgument::NearLabel(a) => {
                 let dst = a.take(addr);
-                jumps.push((addr, dst));
+                add_jump(addr, dst);
                 self.show_addr_helper(project, dst, ui)
             }
             InstructionArgument::RelativeLabel(a) => {
                 let dst = a.take(addr);
-                jumps.push((addr, dst));
+                add_jump(addr, dst);
                 self.show_addr_helper(project, dst, ui)
             }
             InstructionArgument::AbsoluteLabel(a) => {
                 let dst = a.take(addr);
-                jumps.push((addr, dst));
+                add_jump(addr, dst);
                 self.show_addr_helper(project, dst, ui)
             }
             InstructionArgument::LongLabel(a) => {
-                jumps.push((addr, a));
+                add_jump(addr, a);
                 self.show_addr_helper(project, a, ui)
             }
             InstructionArgument::IndirectLabel(a) => todo!(),
