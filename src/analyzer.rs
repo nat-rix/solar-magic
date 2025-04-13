@@ -399,7 +399,7 @@ impl Analyzer {
 
     pub fn add_vectors(&mut self, cart: &Cart) {
         for i in 0..16 {
-            if i & 7 < 2 || i & 7 == 4 || i == 6 || i == 11 {
+            if (0xe4ac >> i) & 1 == 0 {
                 continue;
             }
             let vec = 0xffe0 | (i << 1);

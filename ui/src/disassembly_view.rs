@@ -481,11 +481,21 @@ impl DisassemblyView {
         });
     }
 
-    fn show_addr_helper(&mut self, project: &Project, addr: impl Into<TU24>, ui: &mut egui::Ui) {
+    fn show_addr_helper(
+        &mut self,
+        project: &Project,
+        addr: impl Into<TU24>,
+        isjmp: bool,
+        ui: &mut egui::Ui,
+    ) {
         let Some(addr) = addr.into().get() else {
             return;
         };
-        let btn = egui::Button::new(egui::RichText::new(format!(" {addr}")).monospace());
+        let mut label = egui::RichText::new(format!(" {addr}")).monospace();
+        if !isjmp {
+            label = label.weak();
+        }
+        let btn = egui::Button::new(label);
         if ui.add(btn).clicked() {
             self.jump_list.jump(self.start_addr, addr);
             self.start_addr = addr;
@@ -520,32 +530,32 @@ impl DisassemblyView {
         match arg {
             InstructionArgument::Signature(_) => (),
             InstructionArgument::A(a) => {
-                self.show_addr_helper(project, ctx.resolve_a(cart, &a), ui)
+                self.show_addr_helper(project, ctx.resolve_a(cart, &a), false, ui)
             }
             InstructionArgument::Ax(a) => {
-                self.show_addr_helper(project, ctx.resolve_ax(cart, &a), ui)
+                self.show_addr_helper(project, ctx.resolve_ax(cart, &a), false, ui)
             }
             InstructionArgument::Ay(a) => {
-                self.show_addr_helper(project, ctx.resolve_ay(cart, &a), ui)
+                self.show_addr_helper(project, ctx.resolve_ay(cart, &a), false, ui)
             }
             InstructionArgument::Al(a) => {
-                self.show_addr_helper(project, ctx.resolve_al(cart, &a), ui)
+                self.show_addr_helper(project, ctx.resolve_al(cart, &a), false, ui)
             }
             InstructionArgument::Alx(a) => {
-                self.show_addr_helper(project, ctx.resolve_alx(cart, &a), ui)
+                self.show_addr_helper(project, ctx.resolve_alx(cart, &a), false, ui)
             }
             InstructionArgument::D(a) => {
-                self.show_addr_helper(project, ctx.resolve_d(cart, &a), ui)
+                self.show_addr_helper(project, ctx.resolve_d(cart, &a), false, ui)
             }
             InstructionArgument::Dx(a) => todo!(),
             InstructionArgument::Dy(a) => todo!(),
             InstructionArgument::Dxi(a) => todo!(),
             InstructionArgument::Diy(a) => todo!(),
             InstructionArgument::Dily(a) => {
-                self.show_addr_helper(project, ctx.resolve_dily(cart, &a), ui)
+                self.show_addr_helper(project, ctx.resolve_dily(cart, &a), false, ui)
             }
             InstructionArgument::Di(a) => {
-                self.show_addr_helper(project, ctx.resolve_di(cart, &a), ui)
+                self.show_addr_helper(project, ctx.resolve_di(cart, &a), false, ui)
             }
             InstructionArgument::Dil(a) => todo!(),
             InstructionArgument::S(a) => todo!(),
@@ -554,21 +564,21 @@ impl DisassemblyView {
             InstructionArgument::NearLabel(a) => {
                 let dst = a.take(addr);
                 add_jump(addr, dst);
-                self.show_addr_helper(project, dst, ui)
+                self.show_addr_helper(project, dst, true, ui)
             }
             InstructionArgument::RelativeLabel(a) => {
                 let dst = a.take(addr);
                 add_jump(addr, dst);
-                self.show_addr_helper(project, dst, ui)
+                self.show_addr_helper(project, dst, true, ui)
             }
             InstructionArgument::AbsoluteLabel(a) => {
                 let dst = a.take(addr);
                 add_jump(addr, dst);
-                self.show_addr_helper(project, dst, ui)
+                self.show_addr_helper(project, dst, true, ui)
             }
             InstructionArgument::LongLabel(a) => {
                 add_jump(addr, a);
-                self.show_addr_helper(project, a, ui)
+                self.show_addr_helper(project, a, true, ui)
             }
             InstructionArgument::IndirectLabel(a) => todo!(),
             InstructionArgument::IndirectIndexedLabel(a) => todo!(),
