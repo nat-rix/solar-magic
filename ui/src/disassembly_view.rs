@@ -1,17 +1,19 @@
-use eframe::egui::{
-    self,
-    ahash::{HashMap, HashMapExt},
-};
+use eframe::egui;
+use egui::ahash::{HashMap, HashMapExt};
 use solar_magic::{
     addr::Addr,
     analyzer::AnnotatedInstruction,
-    instruction::{Instruction, InstructionArgument, InstructionNamingConvention, OpCode},
+    instruction::{InstructionArgument, InstructionNamingConvention, OpCode},
     tvl::TU24,
 };
 
 use crate::project::Project;
 
 const SCROLL_SPEED_FACTOR: f32 = 0.1;
+const GRID_ROW_HEIGHT: f32 = 20.0;
+const GRID_JUMPARROW_INDENT: f32 = 20.0;
+const GRID_JUMPARROW_INDENT_START: f32 = 20.0;
+const GRID_JUMPARROW_WIDTH: f32 = 5.0;
 
 const DISASM_COLOR_INSTR: egui::Color32 = crate::theme::rgba(0x179299ff);
 const DISASM_COLOR_ABSOLUTE: egui::Color32 = crate::theme::rgba(0xe64553ff);
@@ -58,13 +60,6 @@ pub struct JumpList {
 }
 
 impl JumpList {
-    pub fn new(addr: Addr) -> Self {
-        Self {
-            buffer: vec![addr],
-            len: 0,
-        }
-    }
-
     pub fn jump(&mut self, src: Addr, dst: Addr) {
         self.buffer.truncate(self.len);
         if !self.buffer.last().is_some_and(|v| v == &src) {
@@ -162,14 +157,85 @@ impl DisassemblyView {
                     }
                 });
                 ui.separator();
+                let mut grid_items = HashMap::new();
+                let mut jumps = vec![];
+                let mut colx = None;
+                let old_remains = ui.available_rect_before_wrap();
                 egui_extras::TableBuilder::new(ui)
-                    .columns(egui_extras::Column::auto(), 3)
+                    .columns(egui_extras::Column::auto(), 4)
+                    // fill the remainder so we have stripes to the end of the panel
                     .column(egui_extras::Column::remainder())
                     .vscroll(false)
                     .striped(true)
                     .body(|mut body| {
-                        self.show_grid_content(project, &mut body);
+                        self.show_grid_content(
+                            project,
+                            &mut body,
+                            &mut grid_items,
+                            &mut jumps,
+                            &mut colx,
+                        );
                     });
+                if let Some(colx) = colx {
+                    let rect = egui::Rect::everything_right_of(colx).intersect(old_remains);
+                    ui.allocate_rect(rect, egui::Sense::empty());
+                    let painter = ui.painter();
+                    let x = rect.min.x;
+                    let mut jump_ys: Vec<_> = jumps
+                        .iter()
+                        .filter_map(|(src, dst)| {
+                            grid_items
+                                .get(src)
+                                .copied()
+                                .and_then(|s| grid_items.get(dst).copied().map(|d| (s, d)))
+                        })
+                        .collect();
+                    jump_ys
+                        .sort_by(|(s1, d1), (s2, d2)| (s1 - d1).abs().total_cmp(&(s2 - d2).abs()));
+                    let mut layers: Vec<usize> = vec![];
+                    for (i, (s, d)) in jump_ys.iter().copied().enumerate() {
+                        let (ymin1, ymax1) = (s.min(d), s.max(d));
+                        let ly = jump_ys
+                            .iter()
+                            .zip(&layers)
+                            .filter(|((s, d), _)| {
+                                let (ymin2, ymax2) = (s.min(*d), s.max(*d));
+                                ymin1 <= ymax2 && ymax1 >= ymin2
+                            })
+                            .map(|(_, ly)| *ly)
+                            .max()
+                            .map(|ly| ly + 1)
+                            .unwrap_or(0);
+                        layers.push(ly);
+                        let x2 =
+                            x + ly as f32 * GRID_JUMPARROW_INDENT + GRID_JUMPARROW_INDENT_START;
+                        let color = egui::Color32::from(egui::epaint::Hsva {
+                            h: i as f32 / jump_ys.len() as f32,
+                            s: 0.6,
+                            v: 0.8,
+                            a: 1.0,
+                        });
+                        painter.line(
+                            vec![
+                                egui::Pos2::new(x, s),
+                                egui::Pos2::new(x2, s),
+                                egui::Pos2::new(x2, d),
+                                egui::Pos2::new(x, d),
+                            ],
+                            (GRID_JUMPARROW_WIDTH, color),
+                        );
+                        painter.add(egui::epaint::PathShape {
+                            points: vec![
+                                egui::Pos2::new(x - 6.0, d),
+                                egui::Pos2::new(x + 1.0, d + 6.0),
+                                egui::Pos2::new(x + 1.0, d - 6.0),
+                            ],
+                            closed: true,
+                            fill: color,
+                            stroke: egui::epaint::PathStroke::NONE,
+                        });
+                    }
+                }
             });
         });
     }
@@ -190,21 +256,25 @@ impl DisassemblyView {
         });
     }
 
-    fn show_grid_content(&mut self, project: &Project, body: &mut egui_extras::TableBody) {
-        // ui.expand_to_include_rect(ui.clip_rect());
+    fn show_grid_content(
+        &mut self,
+        project: &Project,
+        body: &mut egui_extras::TableBody,
+        grid_items: &mut HashMap<Addr, f32>,
+        jumps: &mut Vec<(Addr, Addr)>,
+        colx: &mut Option<f32>,
+    ) {
         let mut addr = self.start_addr;
-        let mut grid_items = HashMap::new();
-        let mut jumps = vec![];
         loop {
             let ui = body.ui_mut();
             if !ui.is_rect_visible(ui.cursor()) {
                 break;
             }
 
-            body.row(20.0, |mut row| {
+            body.row(GRID_ROW_HEIGHT, |mut row| {
+                let row_addr = addr;
                 row.col(|ui| {
                     ui.label(egui::RichText::new(addr.to_string()).monospace().weak());
-                    grid_items.insert(addr, ui.cursor().max);
                 });
 
                 let opt_annotation = project
@@ -231,7 +301,7 @@ impl DisassemblyView {
 
                     row.col(|ui| {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                            self.show_helpers(project, instr, arg, addr, &mut jumps, ui);
+                            self.show_helpers(project, instr, arg, addr, jumps, ui);
                         });
                     });
 
@@ -250,6 +320,19 @@ impl DisassemblyView {
                     });
                     addr = addr.add24(1);
                 }
+                row.col(|ui| {
+                    let rect = ui.available_rect_before_wrap();
+                    grid_items.insert(row_addr, rect.center().y);
+                    let x = rect.min.x;
+                    if let Some(colx) = colx {
+                        *colx = colx.max(x)
+                    } else {
+                        *colx = Some(x)
+                    }
+                    ui.horizontal(|ui| {
+                        ui.add_space(ui.available_width());
+                    });
+                });
             });
         }
     }
