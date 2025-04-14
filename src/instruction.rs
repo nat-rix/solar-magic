@@ -1,7 +1,7 @@
 use crate::addr::Addr;
 
 pub mod am {
-    use crate::tvl::TU24;
+    use crate::tvl::{TU16, TU24};
 
     use super::*;
     /// Absolute
@@ -68,6 +68,11 @@ pub mod am {
             } else {
                 self.addr = self.addr.add16(1);
             }
+        }
+
+        pub fn offset24(mut self, off: impl Into<TU16>) -> Self {
+            self.addr = self.addr.add24(off);
+            self
         }
     }
     impl From<AddrModeRes> for TU24 {

@@ -247,14 +247,15 @@ impl Context {
         }
     }
 
-    pub fn resolve_dily(&self, cart: &Cart, dily: &am::Dily) -> AddrModeRes {
+    pub fn resolve_dil(&self, cart: &Cart, dil: &am::Dil) -> AddrModeRes {
         let addr = self
-            .read24(cart, self.resolve_d(cart, &am::D(dily.0)))
+            .read24(cart, self.resolve_d(cart, &am::D(dil.0)))
             .unwrap_or(TU24::UNKNOWN);
-        AddrModeRes {
-            is24: true,
-            addr: addr.add24(self.y),
-        }
+        AddrModeRes { is24: true, addr }
+    }
+
+    pub fn resolve_dily(&self, cart: &Cart, dily: &am::Dily) -> AddrModeRes {
+        self.resolve_dil(cart, &am::Dil(dily.0)).offset24(self.y)
     }
 
     pub fn resolve_jmli(&self, cart: &Cart, jmli: &IndirectLongLabel) -> TU24 {
@@ -1256,7 +1257,10 @@ impl Analyzer {
                 let addr = ctx.resolve_d(cart, d);
                 self.instr_ldx(cart, &mut ctx, addr);
             }
-            Instruction::LdaDil(dil) => todo!(),
+            Instruction::LdaDil(dil) => {
+                let addr = ctx.resolve_dil(cart, dil);
+                self.instr_lda(cart, &mut ctx, addr);
+            }
             Instruction::Tay => {
                 ctx.y.write_with_size(ctx.a, xf);
                 ctx.set_nzx(ctx.y_sized());
