@@ -432,7 +432,7 @@ impl DisassemblyView {
     }
 
     fn show_instr_ind(is_long: bool, ui: &mut egui::Ui, f: impl FnOnce(&mut egui::Ui)) {
-        let (x, y) = if is_long { ("(", ")") } else { ("[", "]") };
+        let (x, y) = if is_long { ("[", "]") } else { ("(", ")") };
         let [x, y] = [x, y].map(|i| egui::RichText::new(i).monospace());
         ui.horizontal(|ui| {
             ui.colored_label(DISASM_COLOR_INDIRECT, x);
@@ -621,7 +621,13 @@ impl DisassemblyView {
             }
             InstructionArgument::IndirectLabel(a) => todo!(),
             InstructionArgument::IndirectIndexedLabel(a) => todo!(),
-            InstructionArgument::IndirectLongLabel(a) => todo!(),
+            InstructionArgument::IndirectLongLabel(a) => {
+                let dst = ctx.resolve_jmli(cart, &a);
+                if let Some(dst) = dst.get() {
+                    add_jump(addr, dst);
+                }
+                self.show_addr_helper(project, dst, true, ui)
+            }
             InstructionArgument::Flags(a) => self.show_flags_helper(a.0, ui),
             InstructionArgument::Move(_, _) => todo!(),
         }
@@ -784,7 +790,7 @@ impl DisassemblyView {
                                     ui.end_row();
                                     self.show_reg16("Y", ctx.y, ctx.xf(), ui);
                                     ui.end_row();
-                                    self.show_reg8("D", ctx.b, false, ui);
+                                    self.show_reg8("B", ctx.b, false, ui);
                                     ui.end_row();
                                     self.show_reg8("P", ctx.p, true, ui);
                                     ui.end_row();
