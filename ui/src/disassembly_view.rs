@@ -799,17 +799,35 @@ impl DisassemblyView {
                         ui.group(|ui| {
                             ui.heading("Stack");
                             ui.separator();
+                            egui::ScrollArea::vertical().show(ui, |ui| {
+                                egui::Grid::new("sidepanel-stack-grid").num_columns(2).show(
+                                    ui,
+                                    |ui| {
+                                        for i in &ctx.stack.items {
+                                            ui.horizontal(|ui| {
+                                                self.show_tu8_hex(*i, ui);
+                                                self.show_tu4_bin(*i, true, false, ui);
+                                                self.show_tu4_bin(*i, true, false, ui);
+                                            });
+                                            ui.end_row();
+                                        }
+                                    },
+                                );
+                            });
+                        });
+                        ui.group(|ui| {
+                            ui.heading("Memory");
+                            ui.separator();
                             egui::ScrollArea::vertical()
-                                .max_height(300.0)
+                                .id_salt("sidepanel-mem-scroll")
                                 .show(ui, |ui| {
-                                    egui::Grid::new("sidepanel-stack-grid").num_columns(2).show(
+                                    egui::Grid::new("sidepanel-mem-grid").num_columns(2).show(
                                         ui,
                                         |ui| {
-                                            for i in &ctx.stack.items {
+                                            for (a, v) in ctx.map.iter() {
                                                 ui.horizontal(|ui| {
-                                                    self.show_tu8_hex(*i, ui);
-                                                    self.show_tu4_bin(*i, true, false, ui);
-                                                    self.show_tu4_bin(*i, true, false, ui);
+                                                    ui.label(format!("{a:x?}"));
+                                                    ui.label(format!("{v:x?}"));
                                                 });
                                                 ui.end_row();
                                             }

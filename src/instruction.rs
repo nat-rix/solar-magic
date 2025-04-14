@@ -64,7 +64,7 @@ pub mod am {
     impl AddrModeRes {
         pub fn incr(&mut self) {
             if self.is24 {
-                self.addr = self.addr.adc(1, false).0;
+                self.addr = self.addr.add24(1);
             } else {
                 self.addr = self.addr.add16(1);
             }

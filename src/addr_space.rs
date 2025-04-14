@@ -1,6 +1,6 @@
 use crate::{addr::Addr, cart::Cart};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SystemMemoryLocation {
     /// 0x0000..=0x1fff
     Wram(u32),
@@ -31,14 +31,14 @@ pub fn get_system_memory_location(addr: Addr) -> Option<SystemMemoryLocation> {
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CartMemoryLocation {
     Rom(u32),
     Sram(u32),
     Unmapped,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MemoryLocation {
     System(SystemMemoryLocation),
     Cart(CartMemoryLocation),

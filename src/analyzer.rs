@@ -101,7 +101,7 @@ pub struct Context {
     pub d: TU16,
     pub p: TU8,
     pub pc: Addr,
-    pub map: HashMap<MemoryLocation, TU8>,
+    pub map: BTreeMap<MemoryLocation, TU8>,
     pub stack: Stack,
 }
 
@@ -143,10 +143,12 @@ impl Context {
     }
 
     pub fn read24(&self, cart: &Cart, mut addr: AddrModeRes) -> Option<TU24> {
-        let a16 = self.read16(cart, addr)?;
+        let lo = self.read8(cart, addr)?;
         addr.incr();
-        let bank = self.read8(cart, addr)?;
-        Some(TU24::new(bank, a16))
+        let hi = self.read8(cart, addr)?;
+        addr.incr();
+        let ba = self.read8(cart, addr)?;
+        Some(TU24::new(ba, TU16::from_bytes([lo, hi])))
     }
 
     pub fn write_sized(&mut self, cart: &Cart, mut addr: AddrModeRes, val: TUnknown) {
@@ -427,7 +429,7 @@ impl Analyzer {
             d: 0.into(),
             p: (M | X | I).into(),
             pc: Addr::new(0, addr),
-            map: HashMap::new(),
+            map: BTreeMap::new(),
             stack: Default::default(),
         };
         let head = Head {
