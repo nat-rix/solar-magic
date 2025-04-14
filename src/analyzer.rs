@@ -544,11 +544,11 @@ impl Analyzer {
     fn instr_cmpimm(&mut self, ctx: &mut Context, a: TUnknown, b: TUnknown) {
         ctx.p = a.map8(
             |a| {
-                let (r, c) = a.adc(b.get8(), true);
+                let (r, c) = a.adc(!b.get8(), true);
                 r.set_nz(ctx.p).with_bits(C, c)
             },
             |a| {
-                let (r, c) = a.adc(b.get16(), true);
+                let (r, c) = a.adc(!b.get16(), true);
                 r.set_nz(ctx.p).with_bits(C, c)
             },
         );
