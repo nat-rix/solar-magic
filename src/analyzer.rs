@@ -5,7 +5,7 @@ use crate::{
     addr_space::{CartMemoryLocation, MemoryLocation, SystemMemoryLocation},
     cart::Cart,
     instruction::{
-        Instruction,
+        IndirectLongLabel, Instruction,
         am::{self, AddrModeRes},
     },
     pf::*,
@@ -253,6 +253,17 @@ impl Context {
             is24: true,
             addr: addr.add24(self.y),
         }
+    }
+
+    pub fn resolve_jmli(&self, cart: &Cart, jmli: &IndirectLongLabel) -> TU24 {
+        self.read24(
+            cart,
+            AddrModeRes {
+                is24: false,
+                addr: TU24::new(0, jmli.0),
+            },
+        )
+        .unwrap_or(TU24::UNKNOWN)
     }
 
     pub fn set_nz8(&mut self, val: impl Into<TU8>) {
@@ -712,6 +723,12 @@ impl Analyzer {
         ctx.a.write_sized(new);
     }
 
+    fn instr_ror(&mut self, cart: &Cart, ctx: &mut Context, addr: AddrModeRes) {
+        let rhs = ctx.read_sized_m(cart, addr);
+        let new = self.instr_rorany(ctx, rhs);
+        ctx.write_sized(cart, addr, new);
+    }
+
     fn instr_branch(&mut self, head: Head, p: u8, is_set: bool, label: Addr) {
         let cond = head.ctx.p.contains_any(p) ^ !is_set;
         if cond.is_true_or_unknown() {
@@ -862,6 +879,8 @@ impl Analyzer {
                 ctx.y = ctx.y.either(ctx.y & 0xff);
             }
         }
+
+        // println!("{instr_pc} | {instr:x?}");
 
         #[allow(unused_variables)]
         match &instr {
@@ -1057,8 +1076,14 @@ impl Analyzer {
                 let addr = ctx.resolve_dx(cart, dx);
                 self.instr_stz(cart, &mut ctx, addr);
             }
-            Instruction::AdcDx(dx) => todo!(),
-            Instruction::RorDx(dx) => todo!(),
+            Instruction::AdcDx(dx) => {
+                let addr = ctx.resolve_dx(cart, dx);
+                self.instr_adc(cart, &mut ctx, addr, false);
+            }
+            Instruction::RorDx(dx) => {
+                let addr = ctx.resolve_dx(cart, dx);
+                self.instr_ror(cart, &mut ctx, addr);
+            }
             Instruction::AdcDily(dily) => todo!(),
             Instruction::Sei => ctx.p |= I,
             Instruction::AdcAy(ay) => {
@@ -1071,14 +1096,23 @@ impl Analyzer {
                 ctx.set_nz16(ctx.a);
             }
             Instruction::Jmpxi(_) => todo!(),
-            Instruction::AdcAx(ax) => todo!(),
+            Instruction::AdcAx(ax) => {
+                let addr = ctx.resolve_ax(cart, ax);
+                self.instr_adc(cart, &mut ctx, addr, false);
+            }
             Instruction::RorAx(ax) => todo!(),
-            Instruction::AdcAlx(alx) => todo!(),
+            Instruction::AdcAlx(alx) => {
+                let addr = ctx.resolve_alx(cart, alx);
+                self.instr_adc(cart, &mut ctx, addr, false);
+            }
             Instruction::Bra(label) => ctx.pc = label.take(instr_pc),
             Instruction::StaDxi(dxi) => todo!(),
             Instruction::Brl(near_label) => todo!(),
             Instruction::StaS(s) => todo!(),
-            Instruction::StyD(d) => todo!(),
+            Instruction::StyD(d) => {
+                let addr = ctx.resolve_d(cart, d);
+                self.instr_sty(cart, &mut ctx, addr);
+            }
             Instruction::StaD(d) => {
                 let addr = ctx.resolve_d(cart, d);
                 self.instr_sta(cart, &mut ctx, addr);
@@ -1121,15 +1155,24 @@ impl Analyzer {
                 return Ok(instr);
             }
             Instruction::StaDiy(diy) => todo!(),
-            Instruction::StaDi(di) => todo!(),
+            Instruction::StaDi(di) => {
+                let addr = ctx.resolve_di(cart, di);
+                self.instr_sta(cart, &mut ctx, addr);
+            }
             Instruction::StaSiy(siy) => todo!(),
-            Instruction::StyDx(dx) => todo!(),
+            Instruction::StyDx(dx) => {
+                let addr = ctx.resolve_dx(cart, dx);
+                self.instr_sty(cart, &mut ctx, addr);
+            }
             Instruction::StaDx(dx) => {
                 let addr = ctx.resolve_dx(cart, dx);
                 self.instr_sta(cart, &mut ctx, addr);
             }
             Instruction::StxDy(dy) => todo!(),
-            Instruction::StaDily(dily) => todo!(),
+            Instruction::StaDily(dily) => {
+                let addr = ctx.resolve_dily(cart, dily);
+                self.instr_sta(cart, &mut ctx, addr);
+            }
             Instruction::Tya => {
                 ctx.a.write_with_size(ctx.y, mf);
                 ctx.set_nzx(ctx.a_sized());
@@ -1148,7 +1191,10 @@ impl Analyzer {
                 let addr = ctx.resolve_ax(cart, ax);
                 self.instr_sta(cart, &mut ctx, addr);
             }
-            Instruction::StzAx(ax) => todo!(),
+            Instruction::StzAx(ax) => {
+                let addr = ctx.resolve_ax(cart, ax);
+                self.instr_stz(cart, &mut ctx, addr);
+            }
             Instruction::StaAlx(alx) => {
                 let addr = ctx.resolve_alx(cart, alx);
                 self.instr_sta(cart, &mut ctx, addr)
@@ -1303,7 +1349,15 @@ impl Analyzer {
             Instruction::CmpAy(ay) => todo!(),
             Instruction::Phx => ctx.stack.push_unknown(ctx.x_sized()),
             Instruction::Stp => todo!(),
-            Instruction::Jmli(_) => todo!(),
+            Instruction::Jmli(label) => {
+                let dst = ctx.resolve_jmli(cart, label);
+                if let Some(dst) = dst.get() {
+                    ctx.pc = dst;
+                } else {
+                    eprintln!("warn: unknown jump dst at JMLI @ {instr_pc}");
+                    return Ok(instr);
+                }
+            }
             Instruction::CmpAx(ax) => todo!(),
             Instruction::DecAx(ax) => todo!(),
             Instruction::CmpAlx(alx) => todo!(),
@@ -1357,7 +1411,6 @@ impl Analyzer {
             Instruction::SbcAlx(alx) => todo!(),
         }
 
-        //println!("{ctx:x?}");
         self.heads.push(Head { ctx, call_stack });
         Ok(instr)
     }
