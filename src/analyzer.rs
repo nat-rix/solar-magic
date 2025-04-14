@@ -1144,7 +1144,10 @@ impl Analyzer {
                     },
                 )
             }
-            Instruction::Txa => todo!(),
+            Instruction::Txa => {
+                ctx.a.write_with_size(ctx.x, mf);
+                ctx.set_nzx(ctx.a_sized());
+            }
             Instruction::Phb => ctx.stack.push(ctx.b),
             Instruction::StyA(a) => {
                 let addr = ctx.resolve_a(cart, a);
@@ -1194,7 +1197,10 @@ impl Analyzer {
                 self.instr_sta(cart, &mut ctx, addr);
             }
             Instruction::Txs => todo!(),
-            Instruction::Txy => todo!(),
+            Instruction::Txy => {
+                ctx.y.write_with_size(ctx.x, xf);
+                ctx.set_nzx(ctx.y_sized());
+            }
             Instruction::StzA(a) => {
                 let addr = ctx.resolve_a(cart, a);
                 self.instr_stz(cart, &mut ctx, addr)
@@ -1301,7 +1307,10 @@ impl Analyzer {
                 self.instr_lda(cart, &mut ctx, addr);
             }
             Instruction::Tsx => todo!(),
-            Instruction::Tyx => todo!(),
+            Instruction::Tyx => {
+                ctx.x.write_with_size(ctx.y, xf);
+                ctx.set_nzx(ctx.x_sized());
+            }
             Instruction::LdyAx(ax) => {
                 let addr = ctx.resolve_ax(cart, ax);
                 self.instr_ldy(cart, &mut ctx, addr);
