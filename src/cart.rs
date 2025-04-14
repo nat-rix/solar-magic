@@ -2,7 +2,7 @@ use bytemuck::*;
 
 use crate::{
     addr::Addr,
-    addr_space::{CartMemoryLocation, MemoryLocation},
+    addr_space::{CartMemoryLocation, MemoryLocation, SystemMemoryLocation},
 };
 
 #[derive(Debug, Clone)]
@@ -411,6 +411,33 @@ impl Cart {
             .iter()
             .position(|item| item == &CartMemoryLocation::Rom(rom_addr & !0x1fff))
             .map(|i| Addr::from_u32((i << 13) as u32 | (rom_addr & 0x1fff)))
+    }
+
+    pub fn reverse_map_sram(&self, sram_addr: u32) -> Option<Addr> {
+        self.mapping
+            .map
+            .iter()
+            .position(|item| item == &CartMemoryLocation::Sram(sram_addr & !0x1fff))
+            .map(|i| Addr::from_u32((i << 13) as u32 | (sram_addr & 0x1fff)))
+    }
+
+    pub fn reverse_map(&self, loc: MemoryLocation) -> Option<Addr> {
+        Some(match loc {
+            MemoryLocation::System(SystemMemoryLocation::Wram(off)) => {
+                Addr::new(0x7e, 0).add24(off & 0x1ffff)
+            }
+            MemoryLocation::System(SystemMemoryLocation::IoBbus(off)) => {
+                Addr::new(0, u16::from_le_bytes([0x21, off]))
+            }
+            MemoryLocation::System(
+                SystemMemoryLocation::Io(off) | SystemMemoryLocation::Other(off),
+            ) => Addr::new(0, off),
+            MemoryLocation::Cart(CartMemoryLocation::Rom(off)) => return self.reverse_map_rom(off),
+            MemoryLocation::Cart(CartMemoryLocation::Sram(off)) => {
+                return self.reverse_map_sram(off);
+            }
+            MemoryLocation::Cart(CartMemoryLocation::Unmapped) => return None,
+        })
     }
 
     pub fn read_rom(&self, addr: Addr) -> Option<u8> {

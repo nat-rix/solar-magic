@@ -825,9 +825,19 @@ impl DisassemblyView {
                                         ui,
                                         |ui| {
                                             for (a, v) in ctx.map.iter() {
+                                                let Some(addr) = project.smw.cart.reverse_map(*a)
+                                                else {
+                                                    continue;
+                                                };
                                                 ui.horizontal(|ui| {
-                                                    ui.label(format!("{a:x?}"));
-                                                    ui.label(format!("{v:x?}"));
+                                                    ui.label(
+                                                        egui::RichText::new(addr.to_string())
+                                                            .monospace()
+                                                            .weak(),
+                                                    );
+                                                    self.show_tu8_hex(*v, ui);
+                                                    self.show_tu4_bin(*v, true, false, ui);
+                                                    self.show_tu4_bin(*v, true, false, ui);
                                                 });
                                                 ui.end_row();
                                             }
