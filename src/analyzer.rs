@@ -357,6 +357,10 @@ impl CallStack {
     pub fn len(&self) -> usize {
         self.items.len()
     }
+
+    pub fn items(&self) -> &[Addr] {
+        &self.items
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -368,6 +372,7 @@ pub struct Head {
 #[derive(Clone)]
 pub struct Analyzer {
     pub code_annotations: BTreeMap<Addr, HashMap<CallStack, AnnotatedInstruction>>,
+    pub shortest_callstacks: HashMap<Addr, CallStack>,
     heads: Vec<Head>,
 }
 
@@ -375,8 +380,26 @@ impl Analyzer {
     pub fn new() -> Self {
         Self {
             code_annotations: BTreeMap::new(),
+            shortest_callstacks: HashMap::new(),
             heads: vec![],
         }
+    }
+
+    pub fn get_annotation(
+        &self,
+        addr: Addr,
+        call_stack: &CallStack,
+    ) -> Option<&AnnotatedInstruction> {
+        self.code_annotations.get(&addr)?.get(call_stack)
+    }
+
+    pub fn get_annotation_with_shortest_callstack(
+        &self,
+        addr: Addr,
+    ) -> Option<(&CallStack, &AnnotatedInstruction)> {
+        let call_stack = self.shortest_callstacks.get(&addr)?;
+        self.get_annotation(addr, call_stack)
+            .map(|a| (call_stack, a))
     }
 
     pub fn add_vector(&mut self, cart: &Cart, vec: u16) {
@@ -417,6 +440,11 @@ impl Analyzer {
         while !self.is_done() {
             self.analyze_step(cart);
         }
+        self.shortest_callstacks = self
+            .code_annotations
+            .iter()
+            .filter_map(|(k, v)| v.keys().min_by_key(|v| v.len()).map(|v| (*k, v.clone())))
+            .collect();
     }
 
     pub fn is_done(&self) -> bool {

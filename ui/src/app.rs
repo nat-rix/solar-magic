@@ -28,7 +28,7 @@ impl App {
             errors: Errors::new(),
             disassembly_view: DisassemblyView::new(),
         };
-        ctx.egui_ctx.set_style(crate::theme::get_style());
+        crate::theme::set_style(&ctx.egui_ctx);
         crate::fonts::set_fonts(&ctx.egui_ctx);
         if let Some(path) = args.rom_path {
             slf.project.load(&ctx.egui_ctx, path);

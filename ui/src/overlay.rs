@@ -49,6 +49,40 @@ impl crate::app::App {
                     self.about_window ^= true;
                 }
             });
+            #[cfg(debug_assertions)]
+            {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Max), |ui| {
+                    ui.horizontal_centered(|ui| {
+                        ui.label(
+                            egui::RichText::new("Debug build")
+                                .small()
+                                .strong()
+                                .color(ui.visuals().warn_fg_color),
+                        )
+                        .on_hover_text("egui was compiled with debug assertions enabled.");
+                    });
+                    ui.menu_button("Debug", |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_width(100.0)
+                            .max_height(300.0)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let mut doh = ui.ctx().debug_on_hover();
+                                    ui.checkbox(&mut doh, "Debug on hover");
+                                    if doh != ui.ctx().debug_on_hover() {
+                                        ui.ctx().set_debug_on_hover(doh);
+                                    }
+                                    if ui.button("reset style").clicked() {
+                                        crate::theme::set_style(ui.ctx());
+                                    }
+                                });
+                                ui.ctx().clone().settings_ui(ui);
+                            });
+                    });
+                    ui.add_space(ui.available_width());
+                });
+            }
+            egui::warn_if_debug_build(ui);
         });
     }
 

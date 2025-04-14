@@ -2,12 +2,12 @@ use eframe::egui;
 use egui::ahash::{HashMap, HashMapExt};
 use solar_magic::{
     addr::Addr,
-    analyzer::AnnotatedInstruction,
+    analyzer::{AnnotatedInstruction, CallStack},
     instruction::{InstructionArgument, InstructionNamingConvention, OpCode},
-    tvl::TU24,
+    tvl::{TBool, TU8, TU16, TU24, TUnknown},
 };
 
-use crate::project::Project;
+use crate::project::{self, Project};
 
 const SCROLL_SPEED_FACTOR: f32 = 0.1;
 const GRID_ROW_HEIGHT: f32 = 20.0;
@@ -114,8 +114,25 @@ impl JumpList {
     }
 }
 
+fn call_stack_to_text(call_stack: &CallStack) -> String {
+    let items = call_stack.items();
+    if items.is_empty() {
+        return "<empty call stack>".to_string();
+    }
+    let mut s = String::new();
+    for (i, it) in items.iter().enumerate() {
+        s.push_str(&it.to_string());
+        if i != items.len() - 1 {
+            s.push_str(" > ");
+        }
+    }
+    s
+}
+
 pub struct DisassemblyView {
     start_addr: Addr,
+    selected_addr: Option<Addr>,
+    selected_callstack: Option<CallStack>,
     scroll_offset: f32,
     jump_list: JumpList,
 }
@@ -124,6 +141,8 @@ impl DisassemblyView {
     pub fn new() -> Self {
         Self {
             start_addr: Addr::new(0, 0x8000),
+            selected_addr: None,
+            selected_callstack: None,
             scroll_offset: 0.0,
             jump_list: Default::default(),
         }
@@ -181,6 +200,7 @@ impl DisassemblyView {
                     .column(egui_extras::Column::remainder())
                     .vscroll(false)
                     .striped(true)
+                    .sense(egui::Sense::click())
                     .body(|mut body| {
                         self.show_grid_content(
                             project,
@@ -290,15 +310,24 @@ impl DisassemblyView {
 
             body.row(GRID_ROW_HEIGHT, |mut row| {
                 let row_addr = addr;
+                if self.selected_addr.is_some_and(|a| a == row_addr) {
+                    row.set_selected(true);
+                }
+
                 row.col(|ui| {
                     ui.label(egui::RichText::new(addr.to_string()).monospace().weak());
                 });
 
-                let opt_annotation = project
-                    .analyzer
-                    .code_annotations
-                    .get(&addr)
-                    .and_then(|v| v.iter().min_by_key(|(k, _)| k.len()));
+                let call_stack = project.analyzer.shortest_callstacks.get(&addr);
+                let opt_annotation = call_stack.and_then(|call_stack| {
+                    project
+                        .analyzer
+                        .code_annotations
+                        .get(&addr)?
+                        .get(call_stack)
+                        .map(|i| (call_stack, i))
+                });
+
                 if let Some((_call_stack, instr)) = opt_annotation {
                     let opcode = instr.instruction.opcode();
                     let instr_size = instr.instruction.size();
@@ -350,6 +379,14 @@ impl DisassemblyView {
                         ui.add_space(ui.available_width());
                     });
                 });
+                if row.response().clicked() {
+                    if self.selected_addr.is_some_and(|a| a == row_addr) {
+                        self.selected_addr = None;
+                    } else {
+                        self.selected_callstack = None;
+                        self.selected_addr = Some(row_addr);
+                    }
+                }
             });
         }
     }
@@ -547,7 +584,9 @@ impl DisassemblyView {
             InstructionArgument::D(a) => {
                 self.show_addr_helper(project, ctx.resolve_d(cart, &a), false, ui)
             }
-            InstructionArgument::Dx(a) => todo!(),
+            InstructionArgument::Dx(a) => {
+                self.show_addr_helper(project, ctx.resolve_dx(cart, &a), false, ui)
+            }
             InstructionArgument::Dy(a) => todo!(),
             InstructionArgument::Dxi(a) => todo!(),
             InstructionArgument::Diy(a) => todo!(),
@@ -588,18 +627,172 @@ impl DisassemblyView {
         }
     }
 
-    fn show_sidepanel(&mut self, project: &Project, ui: &mut egui::Ui) {
-        ui.collapsing("Position", |ui| {
-            egui::Grid::new("disassembler-sidepanel-position-grid")
-                .striped(true)
-                .num_columns(2)
-                .show(ui, |ui| {
-                    ui.strong("Address:");
-                    ui.add(crate::addr_widget::addr_drag(&mut self.start_addr));
-                    ui.end_row();
-                });
+    fn show_tu4_hex(&mut self, val: TU8, is_high: bool, ui: &mut egui::Ui) {
+        let f = if is_high { |n| n >> 4 } else { |n| n & 15 };
+        if f(val.known_bits()) == 15 {
+            ui.monospace(format!("{:x}", f(val.known_ones())));
+        } else {
+            ui.monospace("?");
+        }
+    }
+
+    fn show_tu8_hex(&mut self, val: TU8, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            self.show_tu4_hex(val, true, ui);
+            self.show_tu4_hex(val, false, ui);
         });
-        // TODO
+    }
+
+    fn show_tu4_bin(&mut self, val: TU8, is_high: bool, pmarkers: bool, ui: &mut egui::Ui) {
+        let known = val.known_bits();
+        let ones = val.known_ones();
+        let shift = if is_high { 4 } else { 0 };
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            for i in (shift..shift + 4).rev() {
+                let label = match [known, ones].map(|v| (v >> i) & 1) {
+                    [0, _] => egui::RichText::new("?").small().monospace().weak(),
+                    [_, 0] => egui::RichText::new("0").small().monospace().weak(),
+                    [_, _] => egui::RichText::new("1").small().monospace().weak(),
+                };
+                if pmarkers {
+                    let marker = ["C", "Z", "I", "D", "X", "M", "V", "N"][i];
+                    ui.label(egui::RichText::new(marker).small().monospace().weak());
+                    ui.label(label);
+                    if i != 0 {
+                        ui.separator();
+                    }
+                } else {
+                    ui.label(label);
+                }
+            }
+        });
+    }
+
+    fn show_anyreg<U>(
+        &mut self,
+        name: &str,
+        fx: impl FnOnce(&mut Self, &mut egui::Ui) -> U,
+        fb: impl FnOnce(&mut Self, &mut egui::Ui) -> U,
+        spacing: bool,
+        ui: &mut egui::Ui,
+    ) {
+        ui.monospace(name);
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Max), |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            fx(self, ui);
+        });
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Max), |ui| {
+            ui.spacing_mut().item_spacing.x = if spacing { 4.0 } else { 0.0 };
+            fb(self, ui);
+        });
+    }
+
+    fn show_reg8(&mut self, name: &str, val: TU8, pmarkers: bool, ui: &mut egui::Ui) {
+        self.show_anyreg(
+            name,
+            |slf, ui| slf.show_tu8_hex(val, ui),
+            |slf, ui| {
+                slf.show_tu4_bin(val, true, pmarkers, ui);
+                slf.show_tu4_bin(val, false, pmarkers, ui);
+            },
+            !pmarkers,
+            ui,
+        );
+    }
+
+    fn show_reg16(&mut self, name: &str, val: TU16, is16: impl Into<TBool>, ui: &mut egui::Ui) {
+        // TODO: faint the upper 8-bit of 16-bit if is16=false
+        let [lo, hi] = val.to_bytes();
+        self.show_anyreg(
+            name,
+            |slf, ui| {
+                slf.show_tu8_hex(hi, ui);
+                slf.show_tu8_hex(lo, ui);
+            },
+            |slf, ui| {
+                slf.show_tu4_bin(hi, true, false, ui);
+                slf.show_tu4_bin(hi, false, false, ui);
+                slf.show_tu4_bin(lo, true, false, ui);
+                slf.show_tu4_bin(lo, false, false, ui);
+            },
+            true,
+            ui,
+        );
+    }
+
+    fn show_sidepanel_call_stack<'a>(
+        &mut self,
+        project: &'a Project,
+        ui: &mut egui::Ui,
+    ) -> Option<(Addr, &'a AnnotatedInstruction)> {
+        let addr = self.selected_addr?;
+        if self.selected_callstack.is_none() {
+            self.selected_callstack = Some(
+                project
+                    .analyzer
+                    .get_annotation_with_shortest_callstack(addr)?
+                    .0
+                    .clone(),
+            );
+        }
+        let call_stack = self.selected_callstack.as_mut().unwrap();
+        let mut selected = &*call_stack;
+        egui::ComboBox::from_label("Call Stack")
+            .selected_text(call_stack_to_text(selected))
+            .show_ui(ui, |ui| {
+                for item in project
+                    .analyzer
+                    .code_annotations
+                    .get(&addr)
+                    .map(|a| a.keys())
+                    .into_iter()
+                    .flatten()
+                {
+                    ui.selectable_value(&mut selected, item, call_stack_to_text(item));
+                }
+            });
+        if selected != call_stack {
+            *call_stack = selected.clone();
+        }
+        project
+            .analyzer
+            .get_annotation(addr, call_stack)
+            .map(|a| (addr, a))
+    }
+
+    fn show_sidepanel(&mut self, project: &Project, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new("Selection")
+            .default_open(true)
+            .enabled(self.selected_addr.is_some())
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    if let Some((_addr, annotation)) = self.show_sidepanel_call_stack(project, ui) {
+                        let ctx = &annotation.pre;
+                        ui.group(|ui| {
+                            egui::Grid::new("sidepanel-register-grid")
+                                .num_columns(3)
+                                .min_col_width(0.0)
+                                .show(ui, |ui| {
+                                    self.show_reg16("A", ctx.a, ctx.mf(), ui);
+                                    ui.end_row();
+                                    self.show_reg16("D", ctx.d, false, ui);
+                                    ui.end_row();
+                                    self.show_reg16("X", ctx.x, ctx.xf(), ui);
+                                    ui.end_row();
+                                    self.show_reg16("Y", ctx.y, ctx.xf(), ui);
+                                    ui.end_row();
+                                    self.show_reg8("D", ctx.b, false, ui);
+                                    ui.end_row();
+                                    self.show_reg8("P", ctx.p, true, ui);
+                                    ui.end_row();
+                                });
+                        });
+                        ui.label(format!("{:?}", annotation));
+                    }
+                });
+            });
     }
 }
 

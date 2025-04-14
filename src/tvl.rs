@@ -162,6 +162,14 @@ macro_rules! impl_tint {
                 }
             }
 
+            pub const fn known_bits(&self) -> $t {
+                self.mask
+            }
+
+            pub const fn known_ones(&self) -> $t {
+                self.mask & self.val
+            }
+
             pub const fn is_zero(&self) -> TBool {
                 if self.mask & self.val != 0 {
                     TBool::False

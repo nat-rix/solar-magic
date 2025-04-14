@@ -5,8 +5,13 @@ pub const fn rgba(v: u32) -> egui::Color32 {
     egui::Color32::from_rgba_premultiplied(r, g, b, a)
 }
 
-pub fn get_style() -> egui::Style {
-    default_themes::dark()
+pub fn set_style(ctx: &egui::Context) {
+    let theme = ctx.theme();
+    let style = match &theme {
+        egui::Theme::Dark => default_themes::dark(),
+        egui::Theme::Light => return,
+    };
+    ctx.set_style_of(theme, style);
 }
 
 mod default_themes {
