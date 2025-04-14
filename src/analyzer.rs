@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::{
     addr::Addr,
-    addr_space::{CartMemoryLocation, MemoryLocation},
+    addr_space::{CartMemoryLocation, MemoryLocation, SystemMemoryLocation},
     cart::Cart,
     instruction::{
         Instruction,
@@ -109,12 +109,11 @@ impl Context {
     pub fn read8(&self, cart: &Cart, addr: impl Into<TU24>) -> Option<TU8> {
         let addr = addr.into();
         let key = cart.map_full(addr.get()?);
-        if let Some(val) = self.map.get(&key) {
-            Some(val.clone())
-        } else if let MemoryLocation::Cart(CartMemoryLocation::Rom(off)) = key {
-            Some(cart.rom.read(off).into())
-        } else {
-            None
+        match &key {
+            MemoryLocation::System(SystemMemoryLocation::Wram(_))
+            | MemoryLocation::Cart(CartMemoryLocation::Sram(_)) => self.map.get(&key).copied(),
+            MemoryLocation::Cart(CartMemoryLocation::Rom(off)) => Some(cart.rom.read(*off).into()),
+            _ => None,
         }
     }
 
@@ -226,6 +225,13 @@ impl Context {
         AddrModeRes {
             is24: false,
             addr: TU24::new(0, self.d.adc(u16::from(d.0), false).0),
+        }
+    }
+
+    pub fn resolve_dx(&self, _cart: &Cart, dx: &am::Dx) -> AddrModeRes {
+        AddrModeRes {
+            is24: false,
+            addr: TU24::new(0, self.d.adc(u16::from(dx.0), false).0.adc(self.x, false).0),
         }
     }
 
@@ -816,8 +822,6 @@ impl Analyzer {
         ) else {
             return Err(());
         };
-        // println!("<{:x?}>", call_stack.items);
-        // println!("{instr_pc} : {instr:x?}");
 
         match xf {
             TBool::True => {
@@ -896,7 +900,7 @@ impl Analyzer {
             Instruction::AndDil(dil) => todo!(),
             Instruction::Plp => ctx.p = ctx.stack.pop(),
             Instruction::AndI(i) => self.instr_andimm(&mut ctx, (*i).into()),
-            Instruction::RolAc => todo!(),
+            Instruction::RolAc => self.instr_rolimm(&mut ctx),
             Instruction::Pld => todo!(),
             Instruction::BitA(a) => {
                 let addr = ctx.resolve_a(cart, a);
@@ -994,7 +998,7 @@ impl Analyzer {
             Instruction::AdcDil(dil) => todo!(),
             Instruction::Pla => ctx.a.write_sized(ctx.stack.pop_unknown(mf)),
             Instruction::AdcI(i) => self.instr_adcimm(&mut ctx, i.clone().into(), false),
-            Instruction::RorAc => todo!(),
+            Instruction::RorAc => self.instr_rorimm(&mut ctx),
             Instruction::Rtl => {
                 let cs_pc = call_stack.pop();
                 if let Some(new_pc) = ctx.stack.pop24().get() {
@@ -1021,7 +1025,10 @@ impl Analyzer {
             Instruction::AdcDiy(diy) => todo!(),
             Instruction::AdcDi(di) => todo!(),
             Instruction::AdcSiy(siy) => todo!(),
-            Instruction::StzDx(dx) => todo!(),
+            Instruction::StzDx(dx) => {
+                let addr = ctx.resolve_dx(cart, dx);
+                self.instr_stz(cart, &mut ctx, addr);
+            }
             Instruction::AdcDx(dx) => todo!(),
             Instruction::RorDx(dx) => todo!(),
             Instruction::AdcDily(dily) => todo!(),
@@ -1089,7 +1096,10 @@ impl Analyzer {
             Instruction::StaDi(di) => todo!(),
             Instruction::StaSiy(siy) => todo!(),
             Instruction::StyDx(dx) => todo!(),
-            Instruction::StaDx(dx) => todo!(),
+            Instruction::StaDx(dx) => {
+                let addr = ctx.resolve_dx(cart, dx);
+                self.instr_sta(cart, &mut ctx, addr);
+            }
             Instruction::StxDy(dy) => todo!(),
             Instruction::StaDily(dily) => todo!(),
             Instruction::Tya => {
@@ -1269,7 +1279,10 @@ impl Analyzer {
             Instruction::CmpAx(ax) => todo!(),
             Instruction::DecAx(ax) => todo!(),
             Instruction::CmpAlx(alx) => todo!(),
-            Instruction::CpxI(i) => todo!(),
+            Instruction::CpxI(i) => {
+                let x = ctx.x_sized();
+                self.instr_cmpimm(&mut ctx, x, (*i).into())
+            }
             Instruction::SbcDxi(dxi) => todo!(),
             Instruction::Sep(p) => ctx.p |= p.0,
             Instruction::SbcS(s) => todo!(),
