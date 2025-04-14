@@ -344,6 +344,16 @@ impl Context {
         });
         self.stack.unify(&ctx.stack);
     }
+
+    pub fn call_subroutine(&mut self, cart: &Cart, new_pc: Addr) {
+        if cart.read_rom(new_pc).is_none() {
+            // in case of subroutines in ram... just ignore them
+            // no ones gonna need them. We have to trust, that they
+            // do a return instruction thou
+            return;
+        }
+        self.pc = new_pc;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -929,14 +939,14 @@ impl Analyzer {
             Instruction::OraAlx(alx) => todo!(),
             Instruction::Jsr(dst) => {
                 ctx.stack.push16(ctx.pc.addr.wrapping_sub(1).into());
-                ctx.pc.addr = dst.0;
+                ctx.call_subroutine(cart, Addr::new(ctx.pc.bank, dst.0));
                 call_stack.push(instr_pc);
             }
             Instruction::AndDxi(dxi) => todo!(),
             Instruction::Jsl(dst) => {
                 ctx.stack.push(ctx.pc.bank.into());
                 ctx.stack.push16(ctx.pc.addr.wrapping_sub(1).into());
-                ctx.pc = *dst;
+                ctx.call_subroutine(cart, *dst);
                 call_stack.push(instr_pc);
             }
             Instruction::AndS(s) => todo!(),
