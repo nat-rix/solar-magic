@@ -14,7 +14,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct Stack {
-    items: Vec<TU8>,
+    pub items: Vec<TU8>,
 }
 
 impl Default for Stack {

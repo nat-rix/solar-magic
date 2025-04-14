@@ -771,6 +771,7 @@ impl DisassemblyView {
                     if let Some((_addr, annotation)) = self.show_sidepanel_call_stack(project, ui) {
                         let ctx = &annotation.pre;
                         ui.group(|ui| {
+                            ui.heading("Registers");
                             egui::Grid::new("sidepanel-register-grid")
                                 .num_columns(3)
                                 .min_col_width(0.0)
@@ -789,7 +790,27 @@ impl DisassemblyView {
                                     ui.end_row();
                                 });
                         });
-                        ui.label(format!("{:?}", annotation));
+                        ui.group(|ui| {
+                            ui.heading("Stack");
+                            ui.separator();
+                            egui::ScrollArea::vertical()
+                                .max_height(300.0)
+                                .show(ui, |ui| {
+                                    egui::Grid::new("sidepanel-stack-grid").num_columns(2).show(
+                                        ui,
+                                        |ui| {
+                                            for i in &ctx.stack.items {
+                                                ui.horizontal(|ui| {
+                                                    self.show_tu8_hex(*i, ui);
+                                                    self.show_tu4_bin(*i, true, false, ui);
+                                                    self.show_tu4_bin(*i, true, false, ui);
+                                                });
+                                                ui.end_row();
+                                            }
+                                        },
+                                    );
+                                });
+                        });
                     }
                 });
             });
