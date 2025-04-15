@@ -230,11 +230,12 @@ impl Context {
         }
     }
 
-    pub fn resolve_dx(&self, _cart: &Cart, dx: &am::Dx) -> AddrModeRes {
-        AddrModeRes {
-            is24: false,
-            addr: TU24::new(0, self.d.adc(u16::from(dx.0), false).0.adc(self.x, false).0),
-        }
+    pub fn resolve_dx(&self, cart: &Cart, dx: &am::Dx) -> AddrModeRes {
+        self.resolve_d(cart, &am::D(dx.0)).offset16(self.x)
+    }
+
+    pub fn resolve_dy(&self, cart: &Cart, dy: &am::Dy) -> AddrModeRes {
+        self.resolve_d(cart, &am::D(dy.0)).offset16(self.y)
     }
 
     pub fn resolve_di(&self, cart: &Cart, di: &am::Di) -> AddrModeRes {
@@ -1047,7 +1048,7 @@ impl Analyzer {
             }
         }
 
-        println!("{instr_pc} | {instr:x?}");
+        // println!("{instr_pc} | {instr:x?}");
 
         #[allow(unused_variables)]
         match &instr {
@@ -1077,7 +1078,10 @@ impl Analyzer {
                 let addr = ctx.resolve_a(cart, a);
                 self.instr_ora(cart, &mut ctx, addr);
             }
-            Instruction::AslA(a) => todo!(),
+            Instruction::AslA(a) => {
+                let addr = ctx.resolve_a(cart, a);
+                self.instr_asl(cart, &mut ctx, addr);
+            }
             Instruction::OraAl(al) => {
                 let addr = ctx.resolve_al(cart, al);
                 self.instr_ora(cart, &mut ctx, addr);
@@ -1097,13 +1101,19 @@ impl Analyzer {
                 let addr = ctx.resolve_dx(cart, dx);
                 self.instr_ora(cart, &mut ctx, addr);
             }
-            Instruction::AslDx(dx) => todo!(),
+            Instruction::AslDx(dx) => {
+                let addr = ctx.resolve_dx(cart, dx);
+                self.instr_asl(cart, &mut ctx, addr);
+            }
             Instruction::OraDily(dily) => {
                 let addr = ctx.resolve_dily(cart, dily);
                 self.instr_ora(cart, &mut ctx, addr);
             }
             Instruction::Clc => ctx.p &= !C,
-            Instruction::OraAy(ay) => todo!(),
+            Instruction::OraAy(ay) => {
+                let addr = ctx.resolve_ay(cart, ay);
+                self.instr_ora(cart, &mut ctx, addr);
+            }
             Instruction::IncAc => self.instr_incimm(&mut ctx, |c| &mut c.a, mf, true),
             Instruction::Tcs => (),
             Instruction::TrbA(a) => todo!(),
@@ -1111,7 +1121,10 @@ impl Analyzer {
                 let addr = ctx.resolve_ax(cart, ax);
                 self.instr_ora(cart, &mut ctx, addr);
             }
-            Instruction::AslAx(ax) => todo!(),
+            Instruction::AslAx(ax) => {
+                let addr = ctx.resolve_ax(cart, ax);
+                self.instr_asl(cart, &mut ctx, addr);
+            }
             Instruction::OraAlx(alx) => {
                 let addr = ctx.resolve_alx(cart, alx);
                 self.instr_ora(cart, &mut ctx, addr);
@@ -1158,8 +1171,14 @@ impl Analyzer {
                 let addr = ctx.resolve_a(cart, a);
                 self.instr_and(cart, &mut ctx, addr);
             }
-            Instruction::RolA(a) => todo!(),
-            Instruction::AndAl(al) => todo!(),
+            Instruction::RolA(a) => {
+                let addr = ctx.resolve_a(cart, a);
+                self.instr_rol(cart, &mut ctx, addr);
+            }
+            Instruction::AndAl(al) => {
+                let addr = ctx.resolve_al(cart, al);
+                self.instr_and(cart, &mut ctx, addr);
+            }
             Instruction::Bmi(label) => {
                 self.instr_branch(Head { ctx, call_stack }, N, true, label.take(instr_pc));
                 return Ok(instr);
@@ -1233,20 +1252,41 @@ impl Analyzer {
             Instruction::EorDi(di) => todo!(),
             Instruction::EorSiy(siy) => todo!(),
             Instruction::Mvn(dst, src) => self.instr_blockmove(cart, &mut ctx, *dst, *src, true),
-            Instruction::EorDx(dx) => todo!(),
-            Instruction::LsrDx(dx) => todo!(),
-            Instruction::EorDily(dily) => todo!(),
+            Instruction::EorDx(dx) => {
+                let addr = ctx.resolve_dx(cart, dx);
+                self.instr_eor(cart, &mut ctx, addr);
+            }
+            Instruction::LsrDx(dx) => {
+                let addr = ctx.resolve_dx(cart, dx);
+                self.instr_lsr(cart, &mut ctx, addr);
+            }
+            Instruction::EorDily(dily) => {
+                let addr = ctx.resolve_dily(cart, dily);
+                self.instr_eor(cart, &mut ctx, addr);
+            }
             Instruction::Cli => ctx.p &= !I,
-            Instruction::EorAy(ay) => todo!(),
+            Instruction::EorAy(ay) => {
+                let addr = ctx.resolve_ay(cart, ay);
+                self.instr_eor(cart, &mut ctx, addr);
+            }
             Instruction::Phy => ctx.stack.push_unknown(ctx.y_sized()),
             Instruction::Tcd => {
                 ctx.d = ctx.a;
                 ctx.set_nz16(ctx.a);
             }
             Instruction::Jml(addr) => todo!(),
-            Instruction::EorAx(ax) => todo!(),
-            Instruction::LsrAx(ax) => todo!(),
-            Instruction::EorAlx(alx) => todo!(),
+            Instruction::EorAx(ax) => {
+                let addr = ctx.resolve_ax(cart, ax);
+                self.instr_eor(cart, &mut ctx, addr);
+            }
+            Instruction::LsrAx(ax) => {
+                let addr = ctx.resolve_ax(cart, ax);
+                self.instr_lsr(cart, &mut ctx, addr);
+            }
+            Instruction::EorAlx(alx) => {
+                let addr = ctx.resolve_alx(cart, alx);
+                self.instr_eor(cart, &mut ctx, addr);
+            }
             Instruction::Rts => {
                 let cs_pc = call_stack.pop();
                 if let Some(new_pc) = ctx.stack.pop16().get() {
@@ -1269,7 +1309,10 @@ impl Analyzer {
                 let addr = ctx.resolve_d(cart, d);
                 self.instr_adc(cart, &mut ctx, addr, false);
             }
-            Instruction::RorD(d) => todo!(),
+            Instruction::RorD(d) => {
+                let addr = ctx.resolve_d(cart, d);
+                self.instr_ror(cart, &mut ctx, addr);
+            }
             Instruction::AdcDil(dil) => todo!(),
             Instruction::Pla => ctx.a.write_sized(ctx.stack.pop_unknown(mf)),
             Instruction::AdcI(i) => self.instr_adcimm(&mut ctx, i.clone().into(), false),
@@ -1291,8 +1334,14 @@ impl Analyzer {
                 let addr = ctx.resolve_a(cart, a);
                 self.instr_adc(cart, &mut ctx, addr, false);
             }
-            Instruction::RorA(a) => todo!(),
-            Instruction::AdcAl(al) => todo!(),
+            Instruction::RorA(a) => {
+                let addr = ctx.resolve_a(cart, a);
+                self.instr_ror(cart, &mut ctx, addr);
+            }
+            Instruction::AdcAl(al) => {
+                let addr = ctx.resolve_al(cart, al);
+                self.instr_adc(cart, &mut ctx, addr, false);
+            }
             Instruction::Bvs(label) => {
                 self.instr_branch(Head { ctx, call_stack }, V, true, label.take(instr_pc));
                 return Ok(instr);
@@ -1527,7 +1576,10 @@ impl Analyzer {
                 let addr = ctx.resolve_dx(cart, dx);
                 self.instr_lda(cart, &mut ctx, addr);
             }
-            Instruction::LdxDy(dy) => todo!(),
+            Instruction::LdxDy(dy) => {
+                let addr = ctx.resolve_dy(cart, dy);
+                self.instr_ldx(cart, &mut ctx, addr);
+            }
             Instruction::LdaDily(dily) => {
                 let addr = ctx.resolve_dily(cart, dily);
                 self.instr_lda(cart, &mut ctx, addr);
@@ -1737,12 +1789,25 @@ impl Analyzer {
             }
             Instruction::SbcSiy(siy) => todo!(),
             Instruction::Pea(_) => todo!(),
-            Instruction::SbcDx(dx) => todo!(),
-            Instruction::IncDx(dx) => todo!(),
-            Instruction::SbcDily(dily) => todo!(),
+            Instruction::SbcDx(dx) => {
+                let addr = ctx.resolve_dx(cart, dx);
+                self.instr_adc(cart, &mut ctx, addr, true);
+            }
+            Instruction::IncDx(dx) => {
+                let addr = ctx.resolve_dx(cart, dx);
+                self.instr_inc(&mut ctx, cart, addr, true);
+            }
+            Instruction::SbcDily(dily) => {
+                let addr = ctx.resolve_dily(cart, dily);
+                self.instr_adc(cart, &mut ctx, addr, true);
+            }
             Instruction::Sed => ctx.p |= D,
-            Instruction::SbcAy(ay) => todo!(),
+            Instruction::SbcAy(ay) => {
+                let addr = ctx.resolve_ay(cart, ay);
+                self.instr_adc(cart, &mut ctx, addr, true);
+            }
             Instruction::Plx => ctx.x.write_sized(ctx.stack.pop_unknown(xf)),
+            // just ignore xce. We normally operate in native mode
             Instruction::Xce => (),
             Instruction::Jsrxi(_) => todo!(),
             Instruction::SbcAx(ax) => {

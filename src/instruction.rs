@@ -70,6 +70,11 @@ pub mod am {
             }
         }
 
+        pub fn offset16(mut self, off: impl Into<TU16>) -> Self {
+            self.addr = self.addr.add16(off);
+            self
+        }
+
         pub fn offset24(mut self, off: impl Into<TU16>) -> Self {
             self.addr = self.addr.add24(off);
             self
