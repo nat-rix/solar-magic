@@ -373,7 +373,14 @@ pub struct CallStack {
 
 impl CallStack {
     pub fn push(&mut self, addr: Addr) {
-        self.items.push(addr);
+        if let Some(ix) = self.items.iter().position(|a| a == &addr) {
+            // If the call stack already contais this address, we are trapped
+            // in an infinity loop. We can break the cycle by reverting the call
+            // stack to the original address.
+            self.items.truncate(ix + 1);
+        } else {
+            self.items.push(addr);
+        }
     }
 
     pub fn pop(&mut self) -> Option<Addr> {
