@@ -5,7 +5,7 @@ use crate::{
     addr_space::{CartMemoryLocation, MemoryLocation, SystemMemoryLocation},
     cart::Cart,
     instruction::{
-        IndirectLongLabel, Instruction,
+        IndirectLongLabel, Instruction, InstructionArgument,
         am::{self, AddrModeRes},
     },
     pf::*,
@@ -388,6 +388,68 @@ impl CallStack {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum JumpTableType {
+    Addr16,
+    Addr24,
+}
+
+impl JumpTableType {
+    pub const fn entry_size(&self) -> u8 {
+        match self {
+            Self::Addr16 => 2,
+            Self::Addr24 => 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JumpTable {
+    pub known_entry_offsets: Vec<u16>,
+    pub ty: JumpTableType,
+}
+
+impl JumpTable {
+    pub fn offset_to_addr(&self, cart: &Cart, offset: u16, table_addr: Addr) -> Option<Addr> {
+        let item_addr = table_addr.add16(offset);
+        let lo = cart.read_rom(item_addr)?;
+        let hi = cart.read_rom(item_addr.add16(1))?;
+        let addr = u16::from_le_bytes([lo, hi]);
+        let bank = match self.ty {
+            JumpTableType::Addr16 => table_addr.bank,
+            JumpTableType::Addr24 => cart.read_rom(item_addr.add16(2))?,
+        };
+        Some(Addr::new(bank, addr))
+    }
+
+    pub fn iter_addrs<'a>(
+        &'a self,
+        cart: &'a Cart,
+        table_addr: Addr,
+    ) -> impl Iterator<Item = Addr> + 'a {
+        self.known_entry_offsets
+            .iter()
+            .filter_map(move |off| self.offset_to_addr(cart, *off, table_addr))
+    }
+
+    pub fn first_free_offset(&self, table_addr: Addr) -> Option<u16> {
+        let mut start = table_addr.addr;
+        let entry_size: u16 = self.ty.entry_size() as _;
+        loop {
+            let off = start.wrapping_sub(table_addr.addr);
+            if !self.known_entry_offsets.contains(&off) {
+                return Some(off);
+            }
+            let old_start = start;
+            start = start.wrapping_add(entry_size);
+            if start <= old_start {
+                break;
+            }
+        }
+        None
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Head {
     pub ctx: Context,
@@ -398,6 +460,7 @@ pub struct Head {
 pub struct Analyzer {
     pub code_annotations: BTreeMap<Addr, HashMap<CallStack, AnnotatedInstruction>>,
     pub shortest_callstacks: HashMap<Addr, CallStack>,
+    jump_tables: BTreeMap<Addr, JumpTable>,
     heads: Vec<Head>,
 }
 
@@ -406,6 +469,7 @@ impl Analyzer {
         Self {
             code_annotations: BTreeMap::new(),
             shortest_callstacks: HashMap::new(),
+            jump_tables: BTreeMap::new(),
             heads: vec![],
         }
     }
@@ -461,10 +525,58 @@ impl Analyzer {
         }
     }
 
+    pub fn find_extendable_jump_table(&mut self, cart: &Cart) -> Option<(&mut JumpTable, u16)> {
+        self.jump_tables.iter_mut().find_map(|(addr, table)| {
+            let off = table.first_free_offset(*addr)?;
+            let dst = table.offset_to_addr(cart, off, *addr)?;
+            let exists = self
+                .code_annotations
+                .get(&dst)
+                .is_some_and(|ann| !ann.is_empty());
+            if exists { None } else { Some((table, off)) }
+        })
+    }
+
     pub fn analyze(&mut self, cart: &Cart) {
-        while !self.is_done() {
-            self.analyze_step(cart);
+        'analyze_loop: loop {
+            while !self.is_done() {
+                self.analyze_step(cart);
+            }
+            for dst in self
+                .jump_tables
+                .iter()
+                .flat_map(|(addr, table)| table.iter_addrs(cart, *addr))
+            {
+                let exists = self
+                    .code_annotations
+                    .get(&dst)
+                    .is_some_and(|ann| !ann.is_empty());
+                if !exists {
+                    self.heads.push(Head {
+                        ctx: Context {
+                            a: TU16::UNKNOWN,
+                            x: TU16::UNKNOWN,
+                            y: TU16::UNKNOWN,
+                            b: TU8::UNKNOWN,
+                            d: TU16::UNKNOWN,
+                            p: TU8::UNKNOWN | M | X,
+                            pc: dst,
+                            map: Default::default(),
+                            stack: Default::default(),
+                        },
+                        call_stack: CallStack::default(),
+                    });
+                    continue 'analyze_loop;
+                }
+            }
+            if let Some((table, off)) = self.find_extendable_jump_table(cart) {
+                println!("extending jump table");
+                table.known_entry_offsets.push(off);
+                continue 'analyze_loop;
+            }
+            break;
         }
+        println!("{:#?}", self.jump_tables);
         self.shortest_callstacks = self
             .code_annotations
             .iter()
@@ -1417,6 +1529,39 @@ impl Analyzer {
             Instruction::Stp => todo!(),
             Instruction::Jmli(label) => {
                 let dst = ctx.resolve_jmli(cart, label);
+                // Assume that every `JML [$xyzw]` instruction is part
+                // of a jump table trampoline.
+                if let Some(jump_table_addr) = call_stack.pop() {
+                    let jump_table_addr = jump_table_addr.add16(4);
+                    let (is16, last_byte_offset) = self
+                        .get_annotation(instr_pc.add16(0xfffe), &call_stack)
+                        .and_then(|ann| {
+                            ann.instruction
+                                .arg()
+                                .map(|arg| matches!(arg, InstructionArgument::I(am::I::U8(3))))
+                                .zip(ann.pre.y.get())
+                        })
+                        .unwrap_or((true, 1));
+                    let jump_table =
+                        self.jump_tables
+                            .entry(jump_table_addr)
+                            .or_insert_with(|| JumpTable {
+                                known_entry_offsets: vec![],
+                                ty: if is16 {
+                                    JumpTableType::Addr16
+                                } else {
+                                    JumpTableType::Addr24
+                                },
+                            });
+                    let offset = if is16 {
+                        last_byte_offset.wrapping_sub(1)
+                    } else {
+                        last_byte_offset.wrapping_sub(2)
+                    };
+                    if !jump_table.known_entry_offsets.contains(&offset) {
+                        jump_table.known_entry_offsets.push(offset);
+                    }
+                }
                 if let Some(dst) = dst.get() {
                     ctx.pc = dst;
                 } else {
