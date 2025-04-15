@@ -411,11 +411,11 @@ impl DisassemblyView {
         Self::show_instr_lit_helper(lit.into(), "#$", ui);
     }
 
-    fn show_instr_mv(s: u8, d: u8, ui: &mut egui::Ui) {
+    fn show_instr_mv(d: u8, s: u8, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            Self::show_instr_lit(s, ui);
-            ui.monospace("");
             Self::show_instr_lit(d, ui);
+            ui.monospace("←");
+            Self::show_instr_lit(s, ui);
         });
     }
 
@@ -512,7 +512,7 @@ impl DisassemblyView {
                     Self::show_instr_ind(true, ui, |ui| Self::show_instr_lit(a.0, ui))
                 }
                 Some(InstructionArgument::Flags(a)) => Self::show_instr_imm(a.0, ui),
-                Some(InstructionArgument::Move(s, d)) => Self::show_instr_mv(s, d, ui),
+                Some(InstructionArgument::Move(d, s)) => Self::show_instr_mv(d, s, ui),
                 None => (),
             }
         });

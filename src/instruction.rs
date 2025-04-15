@@ -278,7 +278,7 @@ pub enum Instruction {
     EorDxi(Dxi),
     Wdm(u8),
     EorS(S),
-    /// src bank, dst bank
+    /// dst bank, src bank
     Mvp(u8, u8),
     EorD(D),
     LsrD(D),
@@ -295,7 +295,7 @@ pub enum Instruction {
     EorDiy(Diy),
     EorDi(Di),
     EorSiy(Siy),
-    /// src bank, dst bank
+    /// dst bank, src bank
     Mvn(u8, u8),
     EorDx(Dx),
     LsrDx(Dx),
@@ -1051,7 +1051,7 @@ impl Instruction {
             | SbcAlx(a) => Ia::Alx(a),
             Jsr(a) | Jmp(a) | Pea(a) => Ia::AbsoluteLabel(a),
             Jsl(a) | Jml(a) => Ia::LongLabel(a),
-            Mvp(s, d) | Mvn(s, d) => Ia::Move(s, d),
+            Mvp(d, s) | Mvn(d, s) => Ia::Move(d, s),
             Per(r) | Brl(r) => Ia::RelativeLabel(r),
             Jmpi(i) => Ia::IndirectLabel(i),
             Jmpxi(i) | Jsrxi(i) => Ia::IndirectIndexedLabel(i),
