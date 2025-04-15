@@ -596,7 +596,9 @@ impl DisassemblyView {
             InstructionArgument::Di(a) => {
                 self.show_addr_helper(project, ctx.resolve_di(cart, &a), false, ui)
             }
-            InstructionArgument::Dil(a) => todo!(),
+            InstructionArgument::Dil(a) => {
+                self.show_addr_helper(project, ctx.resolve_dil(cart, &a), false, ui)
+            }
             InstructionArgument::S(a) => todo!(),
             InstructionArgument::Siy(a) => todo!(),
             InstructionArgument::I(a) => (),

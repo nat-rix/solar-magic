@@ -903,9 +903,15 @@ impl Analyzer {
             Instruction::Cop(_) => todo!(),
             Instruction::OraS(s) => todo!(),
             Instruction::TsbD(d) => todo!(),
-            Instruction::OraD(d) => todo!(),
+            Instruction::OraD(d) => {
+                let addr = ctx.resolve_d(cart, d);
+                self.instr_ora(cart, &mut ctx, addr);
+            }
             Instruction::AslD(d) => todo!(),
-            Instruction::OraDil(dil) => todo!(),
+            Instruction::OraDil(dil) => {
+                let addr = ctx.resolve_dil(cart, dil);
+                self.instr_ora(cart, &mut ctx, addr);
+            }
             Instruction::Php => ctx.stack.push(ctx.p),
             Instruction::OraI(i) => self.instr_oraimm(&mut ctx, (*i).into()),
             Instruction::AslAc => self.instr_aslimm(&mut ctx),
@@ -916,18 +922,30 @@ impl Analyzer {
                 self.instr_ora(cart, &mut ctx, addr);
             }
             Instruction::AslA(a) => todo!(),
-            Instruction::OraAl(al) => todo!(),
+            Instruction::OraAl(al) => {
+                let addr = ctx.resolve_al(cart, al);
+                self.instr_ora(cart, &mut ctx, addr);
+            }
             Instruction::Bpl(label) => {
                 self.instr_branch(Head { ctx, call_stack }, N, false, label.take(instr_pc));
                 return Ok(instr);
             }
             Instruction::OraDiy(diy) => todo!(),
-            Instruction::OraDi(di) => todo!(),
+            Instruction::OraDi(di) => {
+                let addr = ctx.resolve_di(cart, di);
+                self.instr_ora(cart, &mut ctx, addr);
+            }
             Instruction::OraSiy(siy) => todo!(),
             Instruction::TrbD(d) => todo!(),
-            Instruction::OraDx(dx) => todo!(),
+            Instruction::OraDx(dx) => {
+                let addr = ctx.resolve_dx(cart, dx);
+                self.instr_ora(cart, &mut ctx, addr);
+            }
             Instruction::AslDx(dx) => todo!(),
-            Instruction::OraDily(dily) => todo!(),
+            Instruction::OraDily(dily) => {
+                let addr = ctx.resolve_dily(cart, dily);
+                self.instr_ora(cart, &mut ctx, addr);
+            }
             Instruction::Clc => ctx.p &= !C,
             Instruction::OraAy(ay) => todo!(),
             Instruction::IncAc => self.instr_incimm(&mut ctx, |c| &mut c.a, mf, true),
@@ -938,7 +956,10 @@ impl Analyzer {
                 self.instr_ora(cart, &mut ctx, addr);
             }
             Instruction::AslAx(ax) => todo!(),
-            Instruction::OraAlx(alx) => todo!(),
+            Instruction::OraAlx(alx) => {
+                let addr = ctx.resolve_alx(cart, alx);
+                self.instr_ora(cart, &mut ctx, addr);
+            }
             Instruction::Jsr(dst) => {
                 let old_pc = ctx.pc;
                 if ctx.call_subroutine(cart, Addr::new(ctx.pc.bank, dst.0)) {
@@ -956,8 +977,14 @@ impl Analyzer {
                 }
             }
             Instruction::AndS(s) => todo!(),
-            Instruction::BitD(d) => todo!(),
-            Instruction::AndD(d) => todo!(),
+            Instruction::BitD(d) => {
+                let addr = ctx.resolve_d(cart, d);
+                self.instr_bit(cart, &mut ctx, addr);
+            }
+            Instruction::AndD(d) => {
+                let addr = ctx.resolve_d(cart, d);
+                self.instr_and(cart, &mut ctx, addr);
+            }
             Instruction::RolD(d) => {
                 let addr = ctx.resolve_d(cart, d);
                 self.instr_rol(cart, &mut ctx, addr);
@@ -1345,7 +1372,10 @@ impl Analyzer {
             Instruction::CmpS(s) => todo!(),
             Instruction::CpyD(d) => todo!(),
             Instruction::CmpD(d) => todo!(),
-            Instruction::DecD(d) => todo!(),
+            Instruction::DecD(d) => {
+                let addr = ctx.resolve_d(cart, d);
+                self.instr_inc(&mut ctx, cart, addr, false);
+            }
             Instruction::CmpDil(dil) => todo!(),
             Instruction::Iny => self.instr_incimm(&mut ctx, |c| &mut c.y, xf, true),
             Instruction::CmpI(i) => {
@@ -1362,7 +1392,10 @@ impl Analyzer {
                 let addr = ctx.resolve_a(cart, a);
                 self.instr_cmp(cart, &mut ctx, addr);
             }
-            Instruction::DecA(a) => todo!(),
+            Instruction::DecA(a) => {
+                let addr = ctx.resolve_a(cart, a);
+                self.instr_inc(&mut ctx, cart, addr, false);
+            }
             Instruction::CmpAl(al) => todo!(),
             Instruction::Bne(label) => {
                 self.instr_branch(Head { ctx, call_stack }, Z, false, label.take(instr_pc));
@@ -1373,7 +1406,10 @@ impl Analyzer {
             Instruction::CmpSiy(siy) => todo!(),
             Instruction::Pei(_) => todo!(),
             Instruction::CmpDx(dx) => todo!(),
-            Instruction::DecDx(dx) => todo!(),
+            Instruction::DecDx(dx) => {
+                let addr = ctx.resolve_dx(cart, dx);
+                self.instr_inc(&mut ctx, cart, addr, false);
+            }
             Instruction::CmpDily(dily) => todo!(),
             Instruction::Cld => ctx.p &= !D,
             Instruction::CmpAy(ay) => todo!(),
@@ -1389,7 +1425,10 @@ impl Analyzer {
                 }
             }
             Instruction::CmpAx(ax) => todo!(),
-            Instruction::DecAx(ax) => todo!(),
+            Instruction::DecAx(ax) => {
+                let addr = ctx.resolve_ax(cart, ax);
+                self.instr_inc(&mut ctx, cart, addr, false);
+            }
             Instruction::CmpAlx(alx) => todo!(),
             Instruction::CpxI(i) => {
                 let x = ctx.x_sized();
@@ -1417,8 +1456,14 @@ impl Analyzer {
                 let addr = ctx.resolve_a(cart, a);
                 self.instr_cpx(cart, &mut ctx, addr);
             }
-            Instruction::SbcA(a) => todo!(),
-            Instruction::IncA(a) => todo!(),
+            Instruction::SbcA(a) => {
+                let addr = ctx.resolve_a(cart, a);
+                self.instr_adc(cart, &mut ctx, addr, true);
+            }
+            Instruction::IncA(a) => {
+                let addr = ctx.resolve_a(cart, a);
+                self.instr_inc(&mut ctx, cart, addr, true);
+            }
             Instruction::SbcAl(al) => todo!(),
             Instruction::Beq(label) => {
                 self.instr_branch(Head { ctx, call_stack }, Z, true, label.take(instr_pc));

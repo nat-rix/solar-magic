@@ -427,7 +427,7 @@ impl Cart {
                 Addr::new(0x7e, 0).add24(off & 0x1ffff)
             }
             MemoryLocation::System(SystemMemoryLocation::IoBbus(off)) => {
-                Addr::new(0, u16::from_le_bytes([0x21, off]))
+                Addr::new(0, u16::from_le_bytes([off, 0x21]))
             }
             MemoryLocation::System(
                 SystemMemoryLocation::Io(off) | SystemMemoryLocation::Other(off),
