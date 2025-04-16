@@ -546,11 +546,7 @@ impl Analyzer {
                 //       e.g. the table at 02:f825 has a null-pointer
                 return None;
             }
-            let exists = self
-                .code_annotations
-                .get(&dst)
-                .is_some_and(|ann| !ann.is_empty());
-            if exists { None } else { Some((table, off)) }
+            Some((table, off))
         })
     }
 
@@ -1263,7 +1259,10 @@ impl Analyzer {
             }
             Instruction::AndDily(dily) => todo!(),
             Instruction::Sec => ctx.p |= C,
-            Instruction::AndAy(ay) => todo!(),
+            Instruction::AndAy(ay) => {
+                let addr = ctx.resolve_ay(cart, ay);
+                self.instr_and(cart, &mut ctx, addr);
+            }
             Instruction::DecAc => self.instr_incimm(&mut ctx, |c| &mut c.a, mf, false),
             Instruction::Tsc => todo!(),
             Instruction::BitAx(ax) => {
@@ -1340,7 +1339,7 @@ impl Analyzer {
                 ctx.d = ctx.a;
                 ctx.set_nz16(ctx.a);
             }
-            Instruction::Jml(addr) => todo!(),
+            Instruction::Jml(addr) => ctx.pc = *addr,
             Instruction::EorAx(ax) => {
                 let addr = ctx.resolve_ax(cart, ax);
                 self.instr_eor(cart, &mut ctx, addr);
@@ -1365,7 +1364,9 @@ impl Analyzer {
                 }
             }
             Instruction::AdcDxi(dxi) => todo!(),
-            Instruction::Per(_) => todo!(),
+            Instruction::Per(label) => {
+                ctx.stack.push16(label.take(instr_pc).addr.into());
+            }
             Instruction::AdcS(s) => todo!(),
             Instruction::StzD(d) => {
                 let addr = ctx.resolve_d(cart, d);
@@ -1809,7 +1810,6 @@ impl Analyzer {
                 if let Some(dst) = dst.get() {
                     ctx.pc = dst;
                 } else {
-                    eprintln!("warn: unknown jump dst at JMLI @ {instr_pc}");
                     return Ok(instr);
                 }
             }
