@@ -738,6 +738,32 @@ impl Analyzer {
         new_val
     }
 
+    fn instr_tsb(&mut self, ctx: &mut Context, cart: &Cart, addr: AddrModeRes, is_set: bool) {
+        let val = ctx.read_sized_m(cart, addr);
+        let a = ctx.a;
+        let new_val = self.modify(
+            ctx,
+            |v, p| {
+                (
+                    if is_set {
+                        v | a.into_byte()
+                    } else {
+                        v & !a.into_byte()
+                    },
+                    p.with_bits(Z, (v & a.into_byte()).is_zero()),
+                )
+            },
+            |v, p| {
+                (
+                    if is_set { v | a } else { v & !a },
+                    p.with_bits(Z, (v & a).is_zero()),
+                )
+            },
+            val,
+        );
+        ctx.write_sized(cart, addr, new_val);
+    }
+
     fn instr_incany(&mut self, ctx: &mut Context, val: TUnknown, is_inc: bool) -> TUnknown {
         self.modify(
             ctx,
@@ -1055,7 +1081,7 @@ impl Analyzer {
             }
         }
 
-        // println!("{instr_pc} | {instr:x?}");
+        println!("{instr_pc} | {instr:x?}");
 
         #[allow(unused_variables)]
         match &instr {
@@ -1063,7 +1089,10 @@ impl Analyzer {
             Instruction::OraDxi(dxi) => todo!(),
             Instruction::Cop(_) => todo!(),
             Instruction::OraS(s) => todo!(),
-            Instruction::TsbD(d) => todo!(),
+            Instruction::TsbD(d) => {
+                let addr = ctx.resolve_d(cart, d);
+                self.instr_tsb(&mut ctx, cart, addr, true);
+            }
             Instruction::OraD(d) => {
                 let addr = ctx.resolve_d(cart, d);
                 self.instr_ora(cart, &mut ctx, addr);
@@ -1080,7 +1109,10 @@ impl Analyzer {
             Instruction::OraI(i) => self.instr_oraimm(&mut ctx, (*i).into()),
             Instruction::AslAc => self.instr_aslimm(&mut ctx),
             Instruction::Phd => todo!(),
-            Instruction::TsbA(a) => todo!(),
+            Instruction::TsbA(a) => {
+                let addr = ctx.resolve_a(cart, a);
+                self.instr_tsb(&mut ctx, cart, addr, true);
+            }
             Instruction::OraA(a) => {
                 let addr = ctx.resolve_a(cart, a);
                 self.instr_ora(cart, &mut ctx, addr);
@@ -1103,7 +1135,10 @@ impl Analyzer {
                 self.instr_ora(cart, &mut ctx, addr);
             }
             Instruction::OraSiy(siy) => todo!(),
-            Instruction::TrbD(d) => todo!(),
+            Instruction::TrbD(d) => {
+                let addr = ctx.resolve_d(cart, d);
+                self.instr_tsb(&mut ctx, cart, addr, false);
+            }
             Instruction::OraDx(dx) => {
                 let addr = ctx.resolve_dx(cart, dx);
                 self.instr_ora(cart, &mut ctx, addr);
@@ -1123,7 +1158,10 @@ impl Analyzer {
             }
             Instruction::IncAc => self.instr_incimm(&mut ctx, |c| &mut c.a, mf, true),
             Instruction::Tcs => (),
-            Instruction::TrbA(a) => todo!(),
+            Instruction::TrbA(a) => {
+                let addr = ctx.resolve_a(cart, a);
+                self.instr_tsb(&mut ctx, cart, addr, false);
+            }
             Instruction::OraAx(ax) => {
                 let addr = ctx.resolve_ax(cart, ax);
                 self.instr_ora(cart, &mut ctx, addr);
