@@ -541,6 +541,11 @@ impl Analyzer {
         self.jump_tables.iter_mut().find_map(|(addr, table)| {
             let off = table.first_free_offset(*addr)?;
             let dst = table.offset_to_addr(cart, off, *addr)?;
+            if cart.read_rom(dst).is_none() {
+                // TODO: if we are desperate search even further.
+                //       e.g. the table at 02:f825 has a null-pointer
+                return None;
+            }
             let exists = self
                 .code_annotations
                 .get(&dst)
@@ -552,7 +557,6 @@ impl Analyzer {
     pub fn analyze(&mut self, cart: &Cart) {
         'analyze_loop: loop {
             while !self.is_done() {
-                println!("b)");
                 self.analyze_step(cart);
             }
             for dst in self
@@ -579,17 +583,20 @@ impl Analyzer {
                         },
                         call_stack: CallStack::default(),
                     });
+                    // TODO: there can be an infinite loop in case that `analyze_step` fails
+                    //       in the next iteration step
                     continue 'analyze_loop;
                 }
             }
             if let Some((table, off)) = self.find_extendable_jump_table(cart) {
-                println!("extending jump table");
                 table.known_entry_offsets.push(off);
                 continue 'analyze_loop;
             }
             break;
         }
-        println!("{:#?}", self.jump_tables);
+        for (i, j) in &self.jump_tables {
+            println!("{i}: {j:?}");
+        }
         self.shortest_callstacks = self
             .code_annotations
             .iter()
@@ -1086,7 +1093,7 @@ impl Analyzer {
             }
         }
 
-        println!("{instr_pc} | {instr:x?}");
+        // println!("{instr_pc} | {instr:x?}");
 
         #[allow(unused_variables)]
         match &instr {
@@ -1761,17 +1768,24 @@ impl Analyzer {
                 let dst = ctx.resolve_jmli(cart, label);
                 // Assume that every `JML [$xyzw]` instruction is part
                 // of a jump table trampoline.
-                if let Some(jump_table_addr) = call_stack.pop() {
+                if let Some(jump_table_addr) = call_stack.items.last() {
                     let jump_table_addr = jump_table_addr.add16(4);
+
                     let (is16, last_byte_offset) = self
                         .get_annotation(instr_pc.add16(0xfffe), &call_stack)
-                        .and_then(|ann| {
-                            ann.instruction
-                                .arg()
-                                .map(|arg| matches!(arg, InstructionArgument::I(am::I::U8(3))))
-                                .zip(ann.pre.y.get())
+                        .map(|ann| {
+                            (
+                                ann.instruction
+                                    .arg()
+                                    .map(|arg| matches!(arg, InstructionArgument::D(am::D(3)))),
+                                ann.pre.y.get(),
+                            )
                         })
-                        .unwrap_or((true, 1));
+                        .unwrap_or((None, None));
+                    let is16 = is16.unwrap_or(true);
+                    let last_byte_offset =
+                        last_byte_offset.unwrap_or_else(|| if is16 { 1 } else { 2 });
+                    call_stack.pop();
                     let jump_table =
                         self.jump_tables
                             .entry(jump_table_addr)

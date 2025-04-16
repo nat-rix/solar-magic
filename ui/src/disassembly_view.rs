@@ -587,9 +587,13 @@ impl DisassemblyView {
             InstructionArgument::Dx(a) => {
                 self.show_addr_helper(project, ctx.resolve_dx(cart, &a), false, ui)
             }
-            InstructionArgument::Dy(a) => todo!(),
+            InstructionArgument::Dy(a) => {
+                self.show_addr_helper(project, ctx.resolve_dy(cart, &a), false, ui)
+            }
             InstructionArgument::Dxi(a) => todo!(),
-            InstructionArgument::Diy(a) => todo!(),
+            InstructionArgument::Diy(a) => {
+                self.show_addr_helper(project, ctx.resolve_diy(cart, &a), false, ui)
+            }
             InstructionArgument::Dily(a) => {
                 self.show_addr_helper(project, ctx.resolve_dily(cart, &a), false, ui)
             }
@@ -631,7 +635,8 @@ impl DisassemblyView {
                 self.show_addr_helper(project, dst, true, ui)
             }
             InstructionArgument::Flags(a) => self.show_flags_helper(a.0, ui),
-            InstructionArgument::Move(_, _) => todo!(),
+            // TODO: helpers for move instructions (are there actually any needed?)
+            InstructionArgument::Move(_, _) => (),
         }
     }
 
