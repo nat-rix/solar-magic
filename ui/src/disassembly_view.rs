@@ -2,7 +2,7 @@ use eframe::egui;
 use egui::ahash::{HashMap, HashMapExt};
 use solar_magic::{
     addr::Addr,
-    analyzer::{AnnotatedInstruction, CallStack},
+    analyzer::{AnnotatedInstruction, CallStack, JumpTableType},
     instruction::{InstructionArgument, InstructionNamingConvention, OpCode},
     tvl::{TBool, TU8, TU16, TU24, TUnknown},
 };
@@ -50,6 +50,18 @@ impl From<u16> for Lit {
 impl From<Addr> for Lit {
     fn from(value: Addr) -> Self {
         Self::U24(value)
+    }
+}
+
+struct OptByte(Option<u8>);
+
+impl core::fmt::Display for OptByte {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        if let Some(b) = self.0 {
+            write!(f, "{b:02x}")
+        } else {
+            write!(f, "??")
+        }
     }
 }
 
@@ -352,6 +364,70 @@ impl DisassemblyView {
                     });
 
                     addr = addr.add24(instr_size.into());
+                } else if let Some(table_start) = project.analyzer.jump_table_items.get(&addr) {
+                    let table = project.analyzer.jump_tables.get(&table_start).unwrap();
+                    let entry_size = table.ty.entry_size();
+
+                    row.col(|ui| {
+                        Self::show_bytes(
+                            project,
+                            (0..entry_size).map(|i| addr.add16(i.into())),
+                            ui,
+                        );
+                    });
+
+                    let lo = OptByte(project.smw.cart.read_rom(addr));
+                    let hi = OptByte(project.smw.cart.read_rom(addr.add16(1)));
+                    let ba = OptByte(if let JumpTableType::Addr24 = table.ty {
+                        project.smw.cart.read_rom(addr.add16(2))
+                    } else {
+                        None
+                    });
+
+                    row.col(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.colored_label(
+                                DISASM_COLOR_INSTR,
+                                egui::RichText::new(".entry").monospace(),
+                            );
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 2.0;
+                                ui.monospace("$");
+                                if let JumpTableType::Addr24 = table.ty {
+                                    ui.colored_label(
+                                        DISASM_COLOR_ABSOLUTE,
+                                        egui::RichText::new(format!("{ba}")).monospace(),
+                                    );
+                                    ui.monospace(":");
+                                }
+                                ui.colored_label(
+                                    DISASM_COLOR_ABSOLUTE,
+                                    egui::RichText::new(format!("{hi}{lo}")).monospace(),
+                                );
+                            });
+                        });
+                    });
+
+                    row.col(|ui| {
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                            let [OptByte(Some(lo)), OptByte(Some(hi))] = [lo, hi] else {
+                                return;
+                            };
+                            let lohi = u16::from_le_bytes([lo, hi]);
+                            let entry = if let JumpTableType::Addr24 = table.ty {
+                                let OptByte(Some(ba)) = ba else {
+                                    return;
+                                };
+                                Addr::new(ba, lohi)
+                            } else {
+                                Addr::new(table_start.bank, lohi)
+                            };
+                            jumps.entry(entry).or_insert_with(|| vec![]).push(addr);
+                            self.show_addr_helper(project, entry, true, ui);
+                        });
+                    });
+
+                    addr = addr.add24(entry_size.into());
                 } else {
                     row.col(|ui| {
                         Self::show_bytes(project, [addr], ui);

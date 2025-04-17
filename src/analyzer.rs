@@ -483,7 +483,8 @@ pub struct Head {
 pub struct Analyzer {
     pub code_annotations: BTreeMap<Addr, HashMap<CallStack, AnnotatedInstruction>>,
     pub shortest_callstacks: HashMap<Addr, CallStack>,
-    jump_tables: BTreeMap<Addr, JumpTable>,
+    pub jump_tables: BTreeMap<Addr, JumpTable>,
+    pub jump_table_items: BTreeMap<Addr, Addr>,
     heads: Vec<Head>,
 }
 
@@ -493,6 +494,7 @@ impl Analyzer {
             code_annotations: BTreeMap::new(),
             shortest_callstacks: HashMap::new(),
             jump_tables: BTreeMap::new(),
+            jump_table_items: BTreeMap::new(),
             heads: vec![],
         }
     }
@@ -713,6 +715,16 @@ impl Analyzer {
             .code_annotations
             .iter()
             .filter_map(|(k, v)| v.keys().min_by_key(|v| v.len()).map(|v| (*k, v.clone())))
+            .collect();
+        self.jump_table_items = self
+            .jump_tables
+            .iter()
+            .flat_map(|(table_start, table)| {
+                table
+                    .known_entry_offsets
+                    .iter()
+                    .map(|off| (table_start.add16(*off), *table_start))
+            })
             .collect();
     }
 
@@ -1075,12 +1087,16 @@ impl Analyzer {
     fn instr_bit(&mut self, cart: &Cart, ctx: &mut Context, addr: AddrModeRes) {
         ctx.p = ctx.read_sized_m(cart, addr).map_same(
             |b| {
-                let r = ctx.a.into_byte() & b;
-                r.set_nz(ctx.p).with_bits(V, r.extract_bit(6))
+                ctx.p
+                    .with_bits(Z, (ctx.a.into_byte() & b).is_zero())
+                    .with_bits(N, b.msb())
+                    .with_bits(V, b.extract_bit(6))
             },
             |b| {
-                let r = ctx.a & b;
-                r.set_nz(ctx.p).with_bits(V, r.extract_bit(14))
+                ctx.p
+                    .with_bits(Z, (ctx.a & b).is_zero())
+                    .with_bits(N, b.msb())
+                    .with_bits(V, b.extract_bit(14))
             },
             |_, p1, p2| p1.either(p2),
         )
