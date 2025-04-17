@@ -582,7 +582,10 @@ impl Analyzer {
                             Instruction::Rts | Instruction::Rtl => 100,
                             Instruction::Php => 20,
                             Instruction::Pha | Instruction::Phx | Instruction::Phy => 15,
-                            Instruction::Cop(_) | Instruction::Brk(_) | Instruction::Stp => -1_000,
+                            Instruction::Cop(_)
+                            | Instruction::Brk(_)
+                            | Instruction::Stp
+                            | Instruction::Wdm(_) => -1_000,
                             Instruction::Rep(fl) | Instruction::Sep(fl) => {
                                 if fl.0 == 0 {
                                     // basically a NOP, we don't need that
@@ -1327,7 +1330,10 @@ impl Analyzer {
                 let addr = ctx.resolve_d(cart, d);
                 self.instr_rol(cart, &mut ctx, addr);
             }
-            Instruction::AndDil(dil) => todo!(),
+            Instruction::AndDil(dil) => {
+                let addr = ctx.resolve_dil(cart, dil);
+                self.instr_and(cart, &mut ctx, addr);
+            }
             Instruction::Plp => ctx.p = ctx.stack.pop(),
             Instruction::AndI(i) => self.instr_andimm(&mut ctx, (*i).into()),
             Instruction::RolAc => self.instr_rolimm(&mut ctx),
@@ -1356,7 +1362,10 @@ impl Analyzer {
                 let addr = ctx.resolve_diy(cart, diy);
                 self.instr_and(cart, &mut ctx, addr);
             }
-            Instruction::AndDi(di) => todo!(),
+            Instruction::AndDi(di) => {
+                let addr = ctx.resolve_di(cart, di);
+                self.instr_and(cart, &mut ctx, addr);
+            }
             Instruction::AndSiy(siy) => todo!(),
             Instruction::BitDx(dx) => {
                 let addr = ctx.resolve_dx(cart, dx);
@@ -1370,7 +1379,10 @@ impl Analyzer {
                 let addr = ctx.resolve_dx(cart, dx);
                 self.instr_rol(cart, &mut ctx, addr);
             }
-            Instruction::AndDily(dily) => todo!(),
+            Instruction::AndDily(dily) => {
+                let addr = ctx.resolve_dily(cart, dily);
+                self.instr_and(cart, &mut ctx, addr);
+            }
             Instruction::Sec => ctx.p |= C,
             Instruction::AndAy(ay) => {
                 let addr = ctx.resolve_ay(cart, ay);
@@ -1407,7 +1419,10 @@ impl Analyzer {
                 let addr = ctx.resolve_d(cart, d);
                 self.instr_lsr(cart, &mut ctx, addr);
             }
-            Instruction::EorDil(dil) => todo!(),
+            Instruction::EorDil(dil) => {
+                let addr = ctx.resolve_dil(cart, dil);
+                self.instr_eor(cart, &mut ctx, addr);
+            }
             Instruction::Pha => ctx.stack.push_unknown(ctx.a_sized()),
             Instruction::EorI(i) => self.instr_eorimm(&mut ctx, TUnknown::from(*i)),
             Instruction::LsrAc => self.instr_lsrimm(&mut ctx),
@@ -1421,7 +1436,10 @@ impl Analyzer {
                 let addr = ctx.resolve_a(cart, a);
                 self.instr_lsr(cart, &mut ctx, addr);
             }
-            Instruction::EorAl(al) => todo!(),
+            Instruction::EorAl(al) => {
+                let addr = ctx.resolve_al(cart, al);
+                self.instr_eor(cart, &mut ctx, addr);
+            }
             Instruction::Bvc(label) => {
                 self.instr_branch(Head { ctx, call_stack }, V, false, label.take(instr_pc));
                 return Ok(instr);
@@ -1430,7 +1448,10 @@ impl Analyzer {
                 let addr = ctx.resolve_diy(cart, diy);
                 self.instr_eor(cart, &mut ctx, addr);
             }
-            Instruction::EorDi(di) => todo!(),
+            Instruction::EorDi(di) => {
+                let addr = ctx.resolve_di(cart, di);
+                self.instr_eor(cart, &mut ctx, addr);
+            }
             Instruction::EorSiy(siy) => todo!(),
             Instruction::Mvn(dst, src) => self.instr_blockmove(cart, &mut ctx, *dst, *src, true),
             Instruction::EorDx(dx) => {
@@ -1496,7 +1517,10 @@ impl Analyzer {
                 let addr = ctx.resolve_d(cart, d);
                 self.instr_ror(cart, &mut ctx, addr);
             }
-            Instruction::AdcDil(dil) => todo!(),
+            Instruction::AdcDil(dil) => {
+                let addr = ctx.resolve_dil(cart, dil);
+                self.instr_adc(cart, &mut ctx, addr, false);
+            }
             Instruction::Pla => ctx.a.write_sized(ctx.stack.pop_unknown(mf)),
             Instruction::AdcI(i) => self.instr_adcimm(&mut ctx, i.clone().into(), false),
             Instruction::RorAc => self.instr_rorimm(&mut ctx),
@@ -1533,7 +1557,10 @@ impl Analyzer {
                 let addr = ctx.resolve_diy(cart, diy);
                 self.instr_adc(cart, &mut ctx, addr, false);
             }
-            Instruction::AdcDi(di) => todo!(),
+            Instruction::AdcDi(di) => {
+                let addr = ctx.resolve_di(cart, di);
+                self.instr_adc(cart, &mut ctx, addr, false);
+            }
             Instruction::AdcSiy(siy) => todo!(),
             Instruction::StzDx(dx) => {
                 let addr = ctx.resolve_dx(cart, dx);
@@ -1547,7 +1574,10 @@ impl Analyzer {
                 let addr = ctx.resolve_dx(cart, dx);
                 self.instr_ror(cart, &mut ctx, addr);
             }
-            Instruction::AdcDily(dily) => todo!(),
+            Instruction::AdcDily(dily) => {
+                let addr = ctx.resolve_dily(cart, dily);
+                self.instr_adc(cart, &mut ctx, addr, false);
+            }
             Instruction::Sei => ctx.p |= I,
             Instruction::AdcAy(ay) => {
                 let addr = ctx.resolve_ay(cart, ay);
@@ -1643,7 +1673,10 @@ impl Analyzer {
                 let addr = ctx.resolve_dx(cart, dx);
                 self.instr_sta(cart, &mut ctx, addr);
             }
-            Instruction::StxDy(dy) => todo!(),
+            Instruction::StxDy(dy) => {
+                let addr = ctx.resolve_dy(cart, dy);
+                self.instr_stx(cart, &mut ctx, addr);
+            }
             Instruction::StaDily(dily) => {
                 let addr = ctx.resolve_dily(cart, dily);
                 self.instr_sta(cart, &mut ctx, addr);
@@ -1824,7 +1857,10 @@ impl Analyzer {
                 let addr = ctx.resolve_d(cart, d);
                 self.instr_inc(&mut ctx, cart, addr, false);
             }
-            Instruction::CmpDil(dil) => todo!(),
+            Instruction::CmpDil(dil) => {
+                let addr = ctx.resolve_dil(cart, dil);
+                self.instr_cmp(cart, &mut ctx, addr);
+            }
             Instruction::Iny => self.instr_incimm(&mut ctx, |c| &mut c.y, xf, true),
             Instruction::CmpI(i) => {
                 let a = ctx.a_sized();
@@ -1948,7 +1984,10 @@ impl Analyzer {
                 let addr = ctx.resolve_d(cart, d);
                 self.instr_inc(&mut ctx, cart, addr, true);
             }
-            Instruction::SbcDil(dil) => todo!(),
+            Instruction::SbcDil(dil) => {
+                let addr = ctx.resolve_dil(cart, dil);
+                self.instr_adc(cart, &mut ctx, addr, true);
+            }
             Instruction::Inx => self.instr_incimm(&mut ctx, |c| &mut c.x, xf, true),
             Instruction::SbcI(i) => self.instr_adcimm(&mut ctx, i.clone().into(), true),
             Instruction::Nop => (),
