@@ -64,6 +64,17 @@ impl Stack {
         TU24::new(bank, addr)
     }
 
+    fn peek_at(&self, off: usize) -> Option<TU8> {
+        self.items
+            .get(self.items.len().checked_sub(off + 1)?)
+            .copied()
+    }
+
+    pub fn peek24(&self, off: usize) -> TU24 {
+        let [lo, hi, ba] = [0, 1, 2].map(|i| self.peek_at(off + i).unwrap_or(TU8::UNKNOWN));
+        TU24::new(ba, TU16::from_bytes([lo, hi]))
+    }
+
     pub fn push_unknown(&mut self, val: TUnknown) {
         match val {
             TUnknown::U8(val) => self.push(val),
@@ -537,17 +548,122 @@ impl Analyzer {
         }
     }
 
-    pub fn find_extendable_jump_table(&mut self, cart: &Cart) -> Option<(&mut JumpTable, u16)> {
-        self.jump_tables.iter_mut().find_map(|(addr, table)| {
-            let off = table.first_free_offset(*addr)?;
-            let dst = table.offset_to_addr(cart, off, *addr)?;
-            if cart.read_rom(dst).is_none() {
-                // TODO: if we are desperate search even further.
-                //       e.g. the table at 02:f825 has a null-pointer
-                return None;
-            }
-            Some((table, off))
-        })
+    pub fn find_extendable_jump_table(
+        &mut self,
+        cart: &Cart,
+    ) -> Option<(&mut JumpTable, Addr, u16)> {
+        self.jump_tables
+            .iter_mut()
+            .filter_map(|(addr, table)| {
+                let off = table.first_free_offset(*addr)?;
+                let dst = table.offset_to_addr(cart, off, *addr)?;
+                if cart.read_rom(dst).is_none() {
+                    // TODO: if we are desperate search even further.
+                    //       e.g. the table at 02:f825 has a null-pointer
+                    return None;
+                }
+                Some((table, *addr, off, dst))
+            })
+            // table heuristics
+            .filter_map(|(table, table_start, off, dst)| {
+                let mut score: i64 = 0;
+
+                score -= table.known_entry_offsets.len() as i64;
+
+                let mut pc = dst;
+                for _ in 0..5 {
+                    score += if let Some(instr) = Instruction::from_fetcher(
+                        || cart.read_rom(pc.add16_repl(1)),
+                        Some(true),
+                        Some(true),
+                    ) {
+                        (match instr {
+                            // wrong classified RTS & RTL isn't that problematic
+                            Instruction::Rts | Instruction::Rtl => 100,
+                            Instruction::Php => 20,
+                            Instruction::Pha | Instruction::Phx | Instruction::Phy => 15,
+                            Instruction::Cop(_) | Instruction::Brk(_) | Instruction::Stp => -1_000,
+                            Instruction::Rep(fl) | Instruction::Sep(fl) => {
+                                if fl.0 == 0 {
+                                    // basically a NOP, we don't need that
+                                    -30
+                                } else if fl.0 & (Z | I | V | D) != 0 {
+                                    -5
+                                } else {
+                                    20
+                                }
+                            }
+                            Instruction::Jsr(label) => {
+                                score += 10;
+                                pc = label.take(pc);
+                                continue;
+                            }
+                            Instruction::Jsl(label) => {
+                                if label.bank & 0x7e == 0x7e {
+                                    // jumps into wram are actually ok
+                                    20
+                                } else {
+                                    score += 10;
+                                    pc = label;
+                                    continue;
+                                }
+                            }
+                            Instruction::Nop => {
+                                continue;
+                            }
+                            _ => 0,
+                        }) + (match instr.arg() {
+                            Some(InstructionArgument::S(_)) => -40,
+                            Some(InstructionArgument::Siy(_)) => -60,
+                            // these arguments are dependent of the A,X or Y register
+                            // and thus it is unlikely that they are used as the
+                            // first instruction
+                            Some(
+                                InstructionArgument::Ax(_)
+                                | InstructionArgument::Ay(_)
+                                | InstructionArgument::Alx(_)
+                                | InstructionArgument::Dx(_)
+                                | InstructionArgument::Dy(_)
+                                | InstructionArgument::Dxi(_)
+                                | InstructionArgument::Diy(_)
+                                | InstructionArgument::Dily(_),
+                            ) => -50,
+                            _ => 0,
+                        }) + (match instr
+                            .opcode()
+                            .name(crate::instruction::InstructionNamingConvention::Descriptive)
+                        {
+                            // these instructions are dependent of the A,X or Y register
+                            // and thus it is unlikely that they are used as the
+                            // first instruction
+                            "ADC" | "SBC" | "TSB" | "TRB" | "STA" | "STX" | "STY" | "INA"
+                            | "DEA" | "INX" | "INY" | "EOR" | "AND" | "ORA" | "BIT" => -50,
+                            _ => 0,
+                        })
+                    } else {
+                        -1_000
+                    };
+                    break;
+                }
+
+                if dst.bank != table_start.bank {
+                    score -= 5;
+                }
+
+                // JSR & JSL instruction could denote an end of table
+                if dst.addr.to_le_bytes()[0] & 0xfd == 0x20 {
+                    score -= 3;
+                }
+
+                // TODO: this check is temorary: bad looking table elements are skipped
+                if score < -50 {
+                    None
+                } else {
+                    Some((table, table_start, off, dst, score))
+                }
+            })
+            .max_by_key(|(.., score)| *score)
+            .map(|(table, table_start, off, ..)| (table, table_start, off))
     }
 
     pub fn analyze(&mut self, cart: &Cart) {
@@ -555,10 +671,10 @@ impl Analyzer {
             while !self.is_done() {
                 self.analyze_step(cart);
             }
-            for dst in self
+            for (dst, _taddr) in self
                 .jump_tables
                 .iter()
-                .flat_map(|(addr, table)| table.iter_addrs(cart, *addr))
+                .flat_map(|(addr, table)| table.iter_addrs(cart, *addr).map(move |a| (a, addr)))
             {
                 let exists = self
                     .code_annotations
@@ -584,14 +700,11 @@ impl Analyzer {
                     continue 'analyze_loop;
                 }
             }
-            if let Some((table, off)) = self.find_extendable_jump_table(cart) {
+            if let Some((table, taddr, off)) = self.find_extendable_jump_table(cart) {
                 table.known_entry_offsets.push(off);
                 continue 'analyze_loop;
             }
             break;
-        }
-        for (i, j) in &self.jump_tables {
-            println!("{i}: {j:?}");
         }
         self.shortest_callstacks = self
             .code_annotations
@@ -1304,7 +1417,10 @@ impl Analyzer {
                 let addr = ctx.resolve_a(cart, a);
                 self.instr_eor(cart, &mut ctx, addr);
             }
-            Instruction::LsrA(a) => todo!(),
+            Instruction::LsrA(a) => {
+                let addr = ctx.resolve_a(cart, a);
+                self.instr_lsr(cart, &mut ctx, addr);
+            }
             Instruction::EorAl(al) => todo!(),
             Instruction::Bvc(label) => {
                 self.instr_branch(Head { ctx, call_stack }, V, false, label.take(instr_pc));
@@ -1360,7 +1476,7 @@ impl Analyzer {
                     // fall back to our call stack implementation if the system stack got corrupted
                     ctx.pc = new_pc;
                 } else {
-                    return Err(());
+                    return Ok(instr);
                 }
             }
             Instruction::AdcDxi(dxi) => todo!(),
@@ -1393,7 +1509,7 @@ impl Analyzer {
                     // fall back to our call stack implementation if the system stack got corrupted
                     ctx.pc = new_pc;
                 } else {
-                    return Err(());
+                    return Ok(instr);
                 }
             }
             Instruction::Jmpi(_) => todo!(),
@@ -1457,7 +1573,7 @@ impl Analyzer {
             }
             Instruction::Bra(label) => ctx.pc = label.take(instr_pc),
             Instruction::StaDxi(dxi) => todo!(),
-            Instruction::Brl(near_label) => todo!(),
+            Instruction::Brl(label) => ctx.pc = label.take(instr_pc),
             Instruction::StaS(s) => todo!(),
             Instruction::StyD(d) => {
                 let addr = ctx.resolve_d(cart, d);
@@ -1769,44 +1885,32 @@ impl Analyzer {
                 let dst = ctx.resolve_jmli(cart, label);
                 // Assume that every `JML [$xyzw]` instruction is part
                 // of a jump table trampoline.
-                if let Some(jump_table_addr) = call_stack.items.last() {
-                    let jump_table_addr = jump_table_addr.add16(4);
-
-                    let (is16, last_byte_offset) = self
-                        .get_annotation(instr_pc.add16(0xfffe), &call_stack)
-                        .map(|ann| {
-                            (
-                                ann.instruction
-                                    .arg()
-                                    .map(|arg| matches!(arg, InstructionArgument::D(am::D(3)))),
-                                ann.pre.y.get(),
-                            )
-                        })
-                        .unwrap_or((None, None));
-                    let is16 = is16.unwrap_or(true);
-                    let last_byte_offset =
-                        last_byte_offset.unwrap_or_else(|| if is16 { 1 } else { 2 });
-                    call_stack.pop();
-                    let jump_table =
-                        self.jump_tables
-                            .entry(jump_table_addr)
-                            .or_insert_with(|| JumpTable {
-                                known_entry_offsets: vec![],
-                                ty: if is16 {
-                                    JumpTableType::Addr16
-                                } else {
-                                    JumpTableType::Addr24
-                                },
-                            });
-                    let offset = if is16 {
-                        last_byte_offset.wrapping_sub(1)
-                    } else {
-                        last_byte_offset.wrapping_sub(2)
-                    };
-                    if !jump_table.known_entry_offsets.contains(&offset) {
-                        jump_table.known_entry_offsets.push(offset);
+                if let Some(byte) = cart.read_rom(instr_pc.add16(0xffff)) {
+                    let is24 = byte == 5;
+                    let trampoline_offset = if is24 { 0xffdf } else { 0xffe8 };
+                    let ann = self
+                        .get_annotation(instr_pc.add16(trampoline_offset), &call_stack)
+                        .and_then(|ann| ann.pre.stack.peek24(0).get().map(|a| (ann, a.add16(1))));
+                    if let Some((ann, table_start)) = ann {
+                        let idx = ann.pre.a.into_byte().get().unwrap_or(0);
+                        let off = u16::from(idx) * if is24 { 3 } else { 2 };
+                        let table =
+                            self.jump_tables
+                                .entry(table_start)
+                                .or_insert_with(|| JumpTable {
+                                    known_entry_offsets: vec![],
+                                    ty: if is24 {
+                                        JumpTableType::Addr24
+                                    } else {
+                                        JumpTableType::Addr16
+                                    },
+                                });
+                        if !table.known_entry_offsets.contains(&off) {
+                            table.known_entry_offsets.push(off);
+                        }
                     }
                 }
+                call_stack.pop();
                 if let Some(dst) = dst.get() {
                     ctx.pc = dst;
                 } else {
