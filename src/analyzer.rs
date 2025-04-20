@@ -1635,7 +1635,10 @@ impl Analyzer {
                 let addr = ctx.resolve_dil(cart, dil);
                 self.instr_adc(cart, &mut ctx, addr, false);
             }
-            Instruction::Pla => ctx.a.write_sized(ctx.stack.pop_unknown(mf)),
+            Instruction::Pla => {
+                ctx.a.write_sized(ctx.stack.pop_unknown(mf));
+                ctx.set_nzx(ctx.a_sized());
+            }
             Instruction::AdcI(i) => self.instr_adcimm(&mut ctx, i.clone().into(), false),
             Instruction::RorAc => self.instr_rorimm(&mut ctx),
             Instruction::Rtl => {
@@ -1696,7 +1699,10 @@ impl Analyzer {
                 let addr = ctx.resolve_ay(cart, ay);
                 self.instr_adc(cart, &mut ctx, addr, false);
             }
-            Instruction::Ply => ctx.y.write_sized(ctx.stack.pop_unknown(xf)),
+            Instruction::Ply => {
+                ctx.y.write_sized(ctx.stack.pop_unknown(xf));
+                ctx.set_nzx(ctx.y_sized());
+            }
             Instruction::Tdc => {
                 ctx.a = ctx.d;
                 ctx.set_nz16(ctx.a);
@@ -1879,7 +1885,10 @@ impl Analyzer {
                 ctx.x.write_with_size(ctx.a, xf);
                 ctx.set_nzx(ctx.x_sized());
             }
-            Instruction::Plb => ctx.b = ctx.stack.pop(),
+            Instruction::Plb => {
+                ctx.b = ctx.stack.pop();
+                ctx.set_nz8(ctx.b);
+            }
             Instruction::LdyA(a) => {
                 let addr = ctx.resolve_a(cart, a);
                 self.instr_ldy(cart, &mut ctx, addr);
@@ -2071,6 +2080,8 @@ impl Analyzer {
                     };
                     let ret_addr = item.return_addr();
                     let mut ctx = Context::unknown(ret_addr);
+                    // for now we assume all registers to be in 8-bit mode
+                    ctx.p |= M | X;
                     ctx.stack = stack;
                     self.heads.push(Head { ctx, call_stack });
                 }
@@ -2170,7 +2181,10 @@ impl Analyzer {
                 let addr = ctx.resolve_ay(cart, ay);
                 self.instr_adc(cart, &mut ctx, addr, true);
             }
-            Instruction::Plx => ctx.x.write_sized(ctx.stack.pop_unknown(xf)),
+            Instruction::Plx => {
+                ctx.x.write_sized(ctx.stack.pop_unknown(xf));
+                ctx.set_nzx(ctx.x_sized());
+            }
             // just ignore xce. We normally operate in native mode
             Instruction::Xce => (),
             Instruction::Jsrxi(_) => todo!(),
