@@ -12,7 +12,7 @@ use crate::{
     tvl::{TBool, TU8, TU16, TU24, TUnknown},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stack {
     pub items: Vec<TU8>,
 }
@@ -117,6 +117,20 @@ pub struct Context {
 }
 
 impl Context {
+    pub fn unknown(pc: Addr) -> Self {
+        Self {
+            a: TU16::UNKNOWN,
+            x: TU16::UNKNOWN,
+            y: TU16::UNKNOWN,
+            b: TU8::UNKNOWN,
+            d: TU16::UNKNOWN,
+            p: TU8::UNKNOWN,
+            pc,
+            map: Default::default(),
+            stack: Default::default(),
+        }
+    }
+
     pub fn read8(&self, cart: &Cart, addr: impl Into<TU24>) -> Option<TU8> {
         let addr = addr.into();
         let key = cart.map_full(addr.get()?);
@@ -381,24 +395,72 @@ pub struct AnnotatedInstruction {
     pub dst: Vec<Addr>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CallStackRoot {
+    Vector(u16),
+    Table(Addr),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CallStackItem {
+    pub is_long: bool,
+    pub addr: Addr,
+}
+
+impl CallStackItem {
+    pub const fn new_short(addr: Addr) -> Self {
+        Self {
+            is_long: false,
+            addr,
+        }
+    }
+
+    pub const fn new_long(addr: Addr) -> Self {
+        Self {
+            is_long: true,
+            addr,
+        }
+    }
+
+    pub fn return_addr(&self) -> Addr {
+        self.addr.add16(if self.is_long { 4 } else { 3 })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CallStack {
-    items: Vec<Addr>,
+    root: CallStackRoot,
+    items: Vec<CallStackItem>,
 }
 
 impl CallStack {
-    pub fn push(&mut self, addr: Addr) {
-        if let Some(ix) = self.items.iter().position(|a| a == &addr) {
+    pub const fn from_root(root: CallStackRoot) -> Self {
+        Self {
+            root,
+            items: vec![],
+        }
+    }
+
+    pub fn push(&mut self, item: CallStackItem) {
+        if let Some(ix) = self.items.iter().position(|a| a == &item) {
             // If the call stack already contais this address, we are trapped
             // in an infinity loop. We can break the cycle by reverting the call
             // stack to the original address.
             self.items.truncate(ix + 1);
         } else {
-            self.items.push(addr);
+            self.items.push(item);
         }
     }
 
-    pub fn pop(&mut self) -> Option<Addr> {
+    pub fn push_short(&mut self, addr: Addr) {
+        self.push(CallStackItem::new_short(addr));
+    }
+
+    pub fn push_long(&mut self, addr: Addr) {
+        self.push(CallStackItem::new_long(addr));
+    }
+
+    pub fn pop(&mut self) -> Option<CallStackItem> {
         self.items.pop()
     }
 
@@ -406,8 +468,12 @@ impl CallStack {
         self.items.len()
     }
 
-    pub fn items(&self) -> &[Addr] {
+    pub fn items(&self) -> &[CallStackItem] {
         &self.items
+    }
+
+    pub const fn root(&self) -> &CallStackRoot {
+        &self.root
     }
 }
 
@@ -535,7 +601,7 @@ impl Analyzer {
         };
         let head = Head {
             ctx,
-            call_stack: Default::default(),
+            call_stack: CallStack::from_root(CallStackRoot::Vector(vec)),
         };
         self.heads.push(head);
     }
@@ -676,7 +742,7 @@ impl Analyzer {
             while !self.is_done() {
                 self.analyze_step(cart);
             }
-            for (dst, _taddr) in self
+            for (dst, taddr) in self
                 .jump_tables
                 .iter()
                 .flat_map(|(addr, table)| table.iter_addrs(cart, *addr).map(move |a| (a, addr)))
@@ -698,14 +764,14 @@ impl Analyzer {
                             map: Default::default(),
                             stack: Default::default(),
                         },
-                        call_stack: CallStack::default(),
+                        call_stack: CallStack::from_root(CallStackRoot::Table(*taddr)),
                     });
                     // TODO: there can be an infinite loop in case that `analyze_step` fails
                     //       in the next iteration step
                     continue 'analyze_loop;
                 }
             }
-            if let Some((table, taddr, off)) = self.find_extendable_jump_table(cart) {
+            if let Some((table, _taddr, off)) = self.find_extendable_jump_table(cart) {
                 table.known_entry_offsets.push(off);
                 continue 'analyze_loop;
             }
@@ -726,6 +792,38 @@ impl Analyzer {
                     .map(|off| (table_start.add16(*off), *table_start))
             })
             .collect();
+
+        let mut off: u32 = 0;
+        let mut first_area_ix: Option<u32> = None;
+        let mut last_area_ix: Option<u32> = None;
+        while off < cart.rom.data.len() as u32 {
+            let Some(addr) = cart.reverse_map_rom(off) else {
+                break;
+            };
+            off += if let Some((_call_stack, ann)) =
+                self.get_annotation_with_shortest_callstack(addr)
+            {
+                u32::from(ann.instruction.size())
+            } else if let Some(table_start) = self.jump_table_items.get(&addr) {
+                let table = self.jump_tables.get(table_start).unwrap();
+                u32::from(table.ty.entry_size())
+            } else {
+                if first_area_ix.is_none() {
+                    first_area_ix = Some(off);
+                }
+                last_area_ix = Some(off);
+                off += 1;
+                continue;
+            };
+            if let (Some(start), Some(end)) = (first_area_ix, last_area_ix) {
+                first_area_ix = None;
+                let start_addr = cart.reverse_map_rom(start);
+                let end_addr = cart.reverse_map_rom(end);
+                if let (Some(start), Some(end)) = (start_addr, end_addr) {
+                    println!("area: {start}..={end}");
+                }
+            }
+        }
     }
 
     pub fn is_done(&self) -> bool {
@@ -1321,7 +1419,7 @@ impl Analyzer {
                 let old_pc = ctx.pc;
                 if ctx.call_subroutine(cart, Addr::new(ctx.pc.bank, dst.0)) {
                     ctx.stack.push16(old_pc.addr.wrapping_sub(1).into());
-                    call_stack.push(instr_pc);
+                    call_stack.push_short(instr_pc);
                 }
             }
             Instruction::AndDxi(dxi) => todo!(),
@@ -1330,7 +1428,7 @@ impl Analyzer {
                 if ctx.call_subroutine(cart, *dst) {
                     ctx.stack.push(old_pc.bank.into());
                     ctx.stack.push16(old_pc.addr.wrapping_sub(1).into());
-                    call_stack.push(instr_pc);
+                    call_stack.push_long(instr_pc);
                 }
             }
             Instruction::AndS(s) => todo!(),
@@ -1509,9 +1607,9 @@ impl Analyzer {
                 let cs_pc = call_stack.pop();
                 if let Some(new_pc) = ctx.stack.pop16().get() {
                     ctx.pc.addr = new_pc.wrapping_add(1);
-                } else if let Some(new_pc) = cs_pc {
+                } else if let Some(item) = cs_pc {
                     // fall back to our call stack implementation if the system stack got corrupted
-                    ctx.pc = new_pc;
+                    ctx.pc = item.addr;
                 } else {
                     return Ok(instr);
                 }
@@ -1543,11 +1641,10 @@ impl Analyzer {
             Instruction::Rtl => {
                 let cs_pc = call_stack.pop();
                 if let Some(new_pc) = ctx.stack.pop24().get() {
-                    ctx.pc = new_pc;
-                    ctx.pc.addr = ctx.pc.addr.wrapping_add(1);
-                } else if let Some(new_pc) = cs_pc {
+                    ctx.pc = new_pc.add16(1);
+                } else if let Some(item) = cs_pc {
                     // fall back to our call stack implementation if the system stack got corrupted
-                    ctx.pc = new_pc;
+                    ctx.pc = item.addr;
                 } else {
                     return Ok(instr);
                 }
@@ -1963,6 +2060,20 @@ impl Analyzer {
                     }
                 }
                 call_stack.pop();
+                if let Some(item) = call_stack.items.last().copied() {
+                    let mut call_stack = call_stack.clone();
+                    let mut stack = ctx.stack.clone();
+                    call_stack.pop();
+                    if item.is_long {
+                        stack.pop24();
+                    } else {
+                        stack.pop16();
+                    };
+                    let ret_addr = item.return_addr();
+                    let mut ctx = Context::unknown(ret_addr);
+                    ctx.stack = stack;
+                    self.heads.push(Head { ctx, call_stack });
+                }
                 if let Some(dst) = dst.get() {
                     ctx.pc = dst;
                 } else {

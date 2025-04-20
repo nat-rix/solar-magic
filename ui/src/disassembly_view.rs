@@ -2,7 +2,7 @@ use eframe::egui;
 use egui::ahash::{HashMap, HashMapExt};
 use solar_magic::{
     addr::Addr,
-    analyzer::{AnnotatedInstruction, CallStack, JumpTableType},
+    analyzer::{AnnotatedInstruction, CallStack, CallStackRoot, JumpTableType},
     instruction::{InstructionArgument, InstructionNamingConvention, OpCode},
     tvl::{TBool, TU8, TU16, TU24, TUnknown},
 };
@@ -127,15 +127,24 @@ impl JumpList {
 }
 
 fn call_stack_to_text(call_stack: &CallStack) -> String {
-    let items = call_stack.items();
-    if items.is_empty() {
-        return "<empty call stack>".to_string();
-    }
-    let mut s = String::new();
-    for (i, it) in items.iter().enumerate() {
-        s.push_str(&it.to_string());
-        if i != items.len() - 1 {
-            s.push_str(" > ");
+    let mut s = match call_stack.root() {
+        CallStackRoot::Vector(0xffe4) => "COP".to_string(),
+        CallStackRoot::Vector(0xffe6) => "BRK".to_string(),
+        CallStackRoot::Vector(0xffea) => "NMI".to_string(),
+        CallStackRoot::Vector(0xffee) => "IRQ".to_string(),
+        CallStackRoot::Vector(0xfff4) => "COPe".to_string(),
+        CallStackRoot::Vector(0xfffa) => "NMIe".to_string(),
+        CallStackRoot::Vector(0xfffc) => "RESET".to_string(),
+        CallStackRoot::Vector(0xfffe) => "IRQe".to_string(),
+        CallStackRoot::Vector(v) => format!("vec{v:04X}"),
+        CallStackRoot::Table(addr) => format!("<{addr}>"),
+    };
+    for it in call_stack.items() {
+        s.push_str(" > ");
+        if it.is_long {
+            s.push_str(&format!("[{}]", it.addr));
+        } else {
+            s.push_str(&format!("({})", it.addr));
         }
     }
     s
