@@ -636,7 +636,10 @@ impl Analyzer {
             .filter_map(|(table, table_start, off, dst)| {
                 let mut score: i64 = 0;
 
-                score -= table.known_entry_offsets.len() as i64;
+                score -= table.known_entry_offsets.len() as i64 >> 3;
+                if table.known_entry_offsets.len() >= 200 {
+                    score -= 30;
+                }
 
                 let mut pc = dst;
                 for _ in 0..5 {
@@ -1409,7 +1412,7 @@ impl Analyzer {
         match &instr {
             Instruction::Brk(_) => todo!(),
             Instruction::OraDxi(dxi) => todo!(),
-            Instruction::Cop(_) => todo!(),
+            Instruction::Cop(_) => return Ok(instr),
             Instruction::OraS(s) => todo!(),
             Instruction::TsbD(d) => {
                 let addr = ctx.resolve_d(cart, d);
