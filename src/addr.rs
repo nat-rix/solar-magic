@@ -55,6 +55,12 @@ impl Addr {
     pub const fn sub24(self, val: u32) -> Self {
         Self::from_u32(self.to_u32().wrapping_sub(val))
     }
+
+    pub fn range_around(self, radius: u16) -> core::ops::RangeInclusive<Self> {
+        let lhs = Self::new(self.bank, self.addr.saturating_sub(radius));
+        let rhs = Self::new(self.bank, self.addr.saturating_add(radius));
+        lhs..=rhs
+    }
 }
 
 impl core::fmt::Display for Addr {

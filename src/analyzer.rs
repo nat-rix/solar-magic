@@ -649,11 +649,30 @@ impl Analyzer {
                             // wrong classified RTS & RTL isn't that problematic
                             Instruction::Rts | Instruction::Rtl => 100,
                             Instruction::Php => 20,
-                            Instruction::Pha | Instruction::Phx | Instruction::Phy => 15,
+                            Instruction::Pha
+                            | Instruction::Phx
+                            | Instruction::Phy
+                            | Instruction::Phb => 15,
                             Instruction::Cop(_)
                             | Instruction::Brk(_)
                             | Instruction::Stp
                             | Instruction::Wdm(_) => -1_000,
+                            // these branch instructions are dependent of flags. It is rather
+                            // unlikely that they are used as the first intruction
+                            Instruction::Bpl(_)
+                            | Instruction::Bmi(_)
+                            | Instruction::Beq(_)
+                            | Instruction::Bne(_)
+                            | Instruction::Bvc(_)
+                            | Instruction::Bvs(_)
+                            | Instruction::Bcc(_)
+                            | Instruction::Bcs(_) => -20,
+                            Instruction::AslAc
+                            | Instruction::IncAc
+                            | Instruction::RolAc
+                            | Instruction::DecAc
+                            | Instruction::LsrAc
+                            | Instruction::RorAc => -50,
                             Instruction::Rep(fl) | Instruction::Sep(fl) => {
                                 if fl.0 == 0 {
                                     // basically a NOP, we don't need that
@@ -698,7 +717,7 @@ impl Analyzer {
                                 | InstructionArgument::Dxi(_)
                                 | InstructionArgument::Diy(_)
                                 | InstructionArgument::Dily(_),
-                            ) => -50,
+                            ) => -10,
                             _ => 0,
                         }) + (match instr
                             .opcode()
@@ -707,8 +726,12 @@ impl Analyzer {
                             // these instructions are dependent of the A,X or Y register
                             // and thus it is unlikely that they are used as the
                             // first instruction
-                            "ADC" | "SBC" | "TSB" | "TRB" | "STA" | "STX" | "STY" | "INA"
-                            | "DEA" | "INX" | "INY" | "EOR" | "AND" | "ORA" | "BIT" => -50,
+                            "ADC" | "SBC" | "TSB" | "TRB" | "STA" | "EOR" | "AND" | "ORA"
+                            | "BIT" => -50,
+                            "STX" | "STY" | "INX" | "INY" => -10,
+                            // `LDA` is often used as the first instruction, because it
+                            // was invalidated by the trampoline
+                            "LDA" => 10,
                             _ => 0,
                         })
                     } else {
@@ -721,9 +744,52 @@ impl Analyzer {
                     score -= 5;
                 }
 
-                // JSR & JSL instruction could denote an end of table
-                if dst.addr.to_le_bytes()[0] & 0xfd == 0x20 {
-                    score -= 3;
+                // if there is no code in a range it is likely that this points to data
+                if self
+                    .code_annotations
+                    .range(dst.range_around(0x80))
+                    .next()
+                    .is_none()
+                {
+                    score -= 10;
+                }
+                if self
+                    .code_annotations
+                    .range(dst.range_around(0x180))
+                    .next()
+                    .is_none()
+                {
+                    score -= 20;
+                }
+                if self
+                    .code_annotations
+                    .range(dst.range_around(0x600))
+                    .next()
+                    .is_none()
+                {
+                    score -= 20;
+                }
+
+                pc = table_start.add16(off);
+                for _ in 0..5 {
+                    if let Some(instr) = Instruction::from_fetcher(
+                        || cart.read_rom(pc.add16_repl(1)),
+                        Some(true),
+                        Some(true),
+                    ) {
+                        match instr {
+                            Instruction::Jsr(_) | Instruction::Jsl(_) => {
+                                score -= 20;
+                                continue;
+                            }
+                            Instruction::LdaA(_) => {
+                                score -= 15;
+                                continue;
+                            }
+                            _ => (),
+                        }
+                    }
+                    break;
                 }
 
                 // TODO: this check is temorary: bad looking table elements are skipped
@@ -866,6 +932,24 @@ impl Analyzer {
                 // TODO: rehandle
             }
         }
+    }
+
+    fn sync_callstack(
+        &mut self,
+        ctx: &Context,
+        pc: Option<CallStackItem>,
+        call_stack: &mut CallStack,
+    ) -> bool {
+        if pc.is_some_and(|item| item.return_addr() == ctx.pc) {
+            return false;
+        }
+        while let Some(item) = call_stack.items().last() {
+            if item.return_addr() == ctx.pc {
+                return false;
+            }
+            call_stack.pop();
+        }
+        true
     }
 
     fn instr_stz(&mut self, cart: &Cart, ctx: &mut Context, addr: AddrModeRes) {
@@ -1607,9 +1691,13 @@ impl Analyzer {
                 let cs_pc = call_stack.pop();
                 if let Some(new_pc) = ctx.stack.pop16().get() {
                     ctx.pc.addr = new_pc.wrapping_add(1);
+                    if self.sync_callstack(&ctx, cs_pc, &mut call_stack) {
+                        // synchronization failed, so we are unable to analyze the return
+                        return Ok(instr);
+                    }
                 } else if let Some(item) = cs_pc {
                     // fall back to our call stack implementation if the system stack got corrupted
-                    ctx.pc = item.addr;
+                    ctx.pc = item.return_addr();
                 } else {
                     return Ok(instr);
                 }
@@ -1645,9 +1733,13 @@ impl Analyzer {
                 let cs_pc = call_stack.pop();
                 if let Some(new_pc) = ctx.stack.pop24().get() {
                     ctx.pc = new_pc.add16(1);
+                    if self.sync_callstack(&ctx, cs_pc, &mut call_stack) {
+                        // synchronization failed, so we are unable to analyze the return
+                        return Ok(instr);
+                    }
                 } else if let Some(item) = cs_pc {
                     // fall back to our call stack implementation if the system stack got corrupted
-                    ctx.pc = item.addr;
+                    ctx.pc = item.return_addr();
                 } else {
                     return Ok(instr);
                 }
