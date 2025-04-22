@@ -4,10 +4,10 @@ use solar_magic::{
     addr::Addr,
     analyzer::{AnnotatedInstruction, CallStack, CallStackRoot, JumpTableType},
     instruction::{InstructionArgument, InstructionNamingConvention, OpCode},
-    tvl::{TBool, TU8, TU16, TU24, TUnknown},
+    tvl::{TBool, TU8, TU16, TU24},
 };
 
-use crate::project::{self, Project};
+use crate::project::Project;
 
 const SCROLL_SPEED_FACTOR: f32 = 0.1;
 const GRID_ROW_HEIGHT: f32 = 20.0;
@@ -605,7 +605,7 @@ impl DisassemblyView {
 
     fn show_addr_helper(
         &mut self,
-        project: &Project,
+        _project: &Project,
         addr: impl Into<TU24>,
         isjmp: bool,
         ui: &mut egui::Ui,

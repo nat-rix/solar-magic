@@ -676,6 +676,8 @@ impl Analyzer {
                             | Instruction::DecAc
                             | Instruction::LsrAc
                             | Instruction::RorAc => -50,
+                            // a rather uncommon instruction
+                            Instruction::LdyDx(_) => -32,
                             Instruction::Rep(fl) | Instruction::Sep(fl) => {
                                 if fl.0 == 0 {
                                     // basically a NOP, we don't need that
@@ -714,13 +716,16 @@ impl Analyzer {
                             Some(
                                 InstructionArgument::Ax(_)
                                 | InstructionArgument::Ay(_)
-                                | InstructionArgument::Alx(_)
-                                | InstructionArgument::Dx(_)
+                                | InstructionArgument::Alx(_),
+                            ) => -10,
+                            // direct address modes are even less likely
+                            Some(
+                                InstructionArgument::Dx(_)
                                 | InstructionArgument::Dy(_)
                                 | InstructionArgument::Dxi(_)
                                 | InstructionArgument::Diy(_)
                                 | InstructionArgument::Dily(_),
-                            ) => -10,
+                            ) => -20,
                             _ => 0,
                         }) + (match instr
                             .opcode()
@@ -789,6 +794,9 @@ impl Analyzer {
                                 score -= 15;
                                 continue;
                             }
+                            Instruction::Rts => {
+                                score -= 100;
+                            }
                             _ => (),
                         }
                     }
@@ -849,7 +857,22 @@ impl Analyzer {
         self.shortest_callstacks = self
             .code_annotations
             .iter()
-            .filter_map(|(k, v)| v.keys().min_by_key(|v| v.len()).map(|v| (*k, v.clone())))
+            .filter_map(|(k, v)| {
+                v.keys()
+                    .min_by_key(|v| {
+                        (
+                            match &v.root {
+                                CallStackRoot::Vector(0xfffc) => 0,
+                                CallStackRoot::Vector(0xffea) => 1,
+                                CallStackRoot::Vector(0xffee) => 2,
+                                CallStackRoot::Vector(_) => 3,
+                                CallStackRoot::Table(_) => 4,
+                            },
+                            v.len(),
+                        )
+                    })
+                    .map(|v| (*k, v.clone()))
+            })
             .collect();
         self.jump_table_items = self
             .jump_tables

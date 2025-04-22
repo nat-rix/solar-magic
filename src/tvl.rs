@@ -735,4 +735,12 @@ mod tests {
         assert!(TU8::UNKNOWN.is_part_of(TU8::UNKNOWN));
         assert!(!TU8::UNKNOWN.is_part_of(TU8::new(2) & TU8::UNKNOWN));
     }
+
+    #[test]
+    fn test_ror() {
+        let mut v = TU8::UNKNOWN & !0x80;
+        assert_eq!((v.mask, v.val), (0x80, 0));
+        v = v.ror(false.into()).0;
+        assert_eq!((v.mask, v.val), (0xc0, 0));
+    }
 }
