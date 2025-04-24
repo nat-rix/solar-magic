@@ -899,7 +899,7 @@ impl DisassemblyView {
                                             ui.horizontal(|ui| {
                                                 self.show_tu8_hex(*i, ui);
                                                 self.show_tu4_bin(*i, true, false, ui);
-                                                self.show_tu4_bin(*i, true, false, ui);
+                                                self.show_tu4_bin(*i, false, false, ui);
                                             });
                                             ui.end_row();
                                         }
@@ -929,7 +929,7 @@ impl DisassemblyView {
                                                     );
                                                     self.show_tu8_hex(*v, ui);
                                                     self.show_tu4_bin(*v, true, false, ui);
-                                                    self.show_tu4_bin(*v, true, false, ui);
+                                                    self.show_tu4_bin(*v, false, false, ui);
                                                 });
                                                 ui.end_row();
                                             }

@@ -477,7 +477,7 @@ impl CallStack {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JumpTableType {
     Addr16,
     Addr24,
@@ -521,12 +521,17 @@ impl JumpTable {
             .filter_map(move |off| self.offset_to_addr(cart, *off, table_addr))
     }
 
-    pub fn first_free_offset(&self, table_addr: Addr) -> Option<u16> {
+    pub fn first_free_offset(&self, cart: &Cart, table_addr: Addr) -> Option<u16> {
         let mut start = table_addr.addr;
         let entry_size: u16 = self.ty.entry_size() as _;
         loop {
             let off = start.wrapping_sub(table_addr.addr);
-            if !self.known_entry_offsets.contains(&off) {
+            if !self.known_entry_offsets.contains(&off)
+                && !(matches!(self.ty, JumpTableType::Addr16)
+                    && self
+                        .offset_to_addr(cart, off, table_addr)
+                        .is_some_and(|val| val.addr == 0))
+            {
                 return Some(off);
             }
             let old_start = start;
@@ -623,7 +628,7 @@ impl Analyzer {
         self.jump_tables
             .iter_mut()
             .filter_map(|(addr, table)| {
-                let off = table.first_free_offset(*addr)?;
+                let off = table.first_free_offset(cart, *addr)?;
                 let dst = table.offset_to_addr(cart, off, *addr)?;
                 if cart.read_rom(dst).is_none() {
                     // TODO: if we are desperate search even further.
@@ -669,7 +674,7 @@ impl Analyzer {
                             | Instruction::Bvc(_)
                             | Instruction::Bvs(_)
                             | Instruction::Bcc(_)
-                            | Instruction::Bcs(_) => -20,
+                            | Instruction::Bcs(_) => -51,
                             Instruction::AslAc
                             | Instruction::IncAc
                             | Instruction::RolAc
@@ -735,7 +740,7 @@ impl Analyzer {
                             // and thus it is unlikely that they are used as the
                             // first instruction
                             "ADC" | "SBC" | "TSB" | "TRB" | "STA" | "EOR" | "AND" | "ORA"
-                            | "BIT" => -50,
+                            | "BIT" => -51,
                             "STX" | "STY" | "INX" | "INY" => -10,
                             // `LDA` is often used as the first instruction, because it
                             // was invalidated by the trampoline
@@ -797,6 +802,9 @@ impl Analyzer {
                             Instruction::Rts => {
                                 score -= 100;
                             }
+                            Instruction::Rtl => {
+                                score -= 20;
+                            }
                             _ => (),
                         }
                     }
@@ -824,10 +832,11 @@ impl Analyzer {
                 .iter()
                 .flat_map(|(addr, table)| table.iter_addrs(cart, *addr).map(move |a| (a, addr)))
             {
+                let call_stack = CallStack::from_root(CallStackRoot::Table(*taddr));
                 let exists = self
                     .code_annotations
                     .get(&dst)
-                    .is_some_and(|ann| !ann.is_empty());
+                    .is_some_and(|ann| ann.contains_key(&call_stack));
                 if !exists {
                     self.heads.push(Head {
                         ctx: Context {
@@ -841,7 +850,7 @@ impl Analyzer {
                             map: Default::default(),
                             stack: Default::default(),
                         },
-                        call_stack: CallStack::from_root(CallStackRoot::Table(*taddr)),
+                        call_stack,
                     });
                     // TODO: there can be an infinite loop in case that `analyze_step` fails
                     //       in the next iteration step
