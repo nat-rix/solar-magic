@@ -521,16 +521,21 @@ impl JumpTable {
             .filter_map(move |off| self.offset_to_addr(cart, *off, table_addr))
     }
 
+    fn table_entry_is_null(&self, cart: &Cart, table_addr: Addr, off: u16) -> bool {
+        self.offset_to_addr(cart, off, table_addr)
+            .is_some_and(|val| match self.ty {
+                JumpTableType::Addr16 => val.addr == 0,
+                JumpTableType::Addr24 => val == Addr::NULL,
+            })
+    }
+
     pub fn first_free_offset(&self, cart: &Cart, table_addr: Addr) -> Option<u16> {
         let mut start = table_addr.addr;
         let entry_size: u16 = self.ty.entry_size() as _;
         loop {
             let off = start.wrapping_sub(table_addr.addr);
             if !self.known_entry_offsets.contains(&off)
-                && !(matches!(self.ty, JumpTableType::Addr16)
-                    && self
-                        .offset_to_addr(cart, off, table_addr)
-                        .is_some_and(|val| val.addr == 0))
+                && !self.table_entry_is_null(cart, table_addr, off)
             {
                 return Some(off);
             }
@@ -641,10 +646,7 @@ impl Analyzer {
             .filter_map(|(table, table_start, off, dst)| {
                 let mut score: i64 = 0;
 
-                score -= table.known_entry_offsets.len() as i64 >> 3;
-                if table.known_entry_offsets.len() >= 200 {
-                    score -= 30;
-                }
+                score -= table.known_entry_offsets.len().min(200) as i64 >> 3;
 
                 let mut pc = dst;
                 for _ in 0..5 {
@@ -713,6 +715,7 @@ impl Analyzer {
                             }
                             _ => 0,
                         }) + (match instr.arg() {
+                            Some(InstructionArgument::A(_) | InstructionArgument::D(_)) => 5,
                             Some(InstructionArgument::S(_)) => -40,
                             Some(InstructionArgument::Siy(_)) => -60,
                             // these arguments are dependent of the A,X or Y register
@@ -753,8 +756,10 @@ impl Analyzer {
                     break;
                 }
 
-                if dst.bank != table_start.bank {
-                    score -= 5;
+                let is_samebank =
+                    matches!(table.ty, JumpTableType::Addr24) && dst.bank == table_start.bank;
+                if is_samebank {
+                    score += 25;
                 }
 
                 // if there is no code in a range it is likely that this points to data
@@ -800,10 +805,18 @@ impl Analyzer {
                                 continue;
                             }
                             Instruction::Rts => {
-                                score -= 100;
+                                if is_samebank {
+                                    score -= 20;
+                                } else {
+                                    score -= 100;
+                                }
                             }
                             Instruction::Rtl => {
-                                score -= 20;
+                                if is_samebank {
+                                    score -= 5;
+                                } else {
+                                    score -= 20;
+                                }
                             }
                             _ => (),
                         }
