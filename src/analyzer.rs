@@ -658,7 +658,18 @@ impl Analyzer {
                         (match instr {
                             // wrong classified RTS & RTL isn't that problematic
                             Instruction::Rts | Instruction::Rtl => 100,
-                            Instruction::Php => 20,
+                            Instruction::Php => {
+                                score += 20;
+                                // PHP is good here but we need to look ahead,
+                                // because PHP has opcode 0x08
+                                continue;
+                            }
+                            Instruction::Phd => {
+                                score += 5;
+                                // PHD is good here but we need to look ahead,
+                                // because PHD has opcode 0x0B
+                                continue;
+                            }
                             Instruction::Pha
                             | Instruction::Phx
                             | Instruction::Phy
@@ -694,6 +705,12 @@ impl Analyzer {
                                 } else {
                                     20
                                 }
+                            }
+                            // why would you branch in the first instruction of a subroutine
+                            Instruction::Bra(label) => {
+                                score -= 5;
+                                pc = label.take(pc);
+                                continue;
                             }
                             Instruction::Jsr(label) => {
                                 score += 10;
@@ -743,7 +760,7 @@ impl Analyzer {
                             // and thus it is unlikely that they are used as the
                             // first instruction
                             "ADC" | "SBC" | "TSB" | "TRB" | "STA" | "EOR" | "AND" | "ORA"
-                            | "BIT" => -51,
+                            | "BIT" | "CMP" => -51,
                             "STX" | "STY" | "INX" | "INY" => -10,
                             // `LDA` is often used as the first instruction, because it
                             // was invalidated by the trampoline
