@@ -170,7 +170,124 @@ impl DisassemblyView {
     }
 
     fn show_grid(&mut self, project: &Project, ui: &mut egui::Ui) {
-        if ui.ui_contains_pointer() {
+        let rect = ui
+            .with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        let btn = egui::Button::new("");
+                        if ui.add_enabled(self.jump_list.can_undo(), btn).clicked() {
+                            if let Some(dst) = self.jump_list.undo(self.start_addr) {
+                                self.start_addr = dst;
+                            }
+                        }
+                        let btn = egui::Button::new("");
+                        if ui.add_enabled(self.jump_list.can_redo(), btn).clicked() {
+                            if let Some(dst) = self.jump_list.redo() {
+                                self.start_addr = dst;
+                            }
+                        }
+                        let old_start_addr = self.start_addr;
+                        ui.add(
+                            crate::addr_widget::addr_drag(&mut self.start_addr)
+                                .update_while_editing(false),
+                        );
+                        if old_start_addr.to_u32().abs_diff(self.start_addr.to_u32()) > 0x100 {
+                            self.jump_list.jump(old_start_addr, self.start_addr);
+                        }
+                    });
+                    ui.separator();
+                    let mut grid_items = HashMap::new();
+                    let mut jumps = HashMap::new();
+                    let mut colx = None;
+                    let old_remains = ui.available_rect_before_wrap();
+                    egui_extras::TableBuilder::new(ui)
+                        .cell_layout(egui::Layout::centered_and_justified(
+                            egui::Direction::LeftToRight,
+                        ))
+                        .columns(egui_extras::Column::auto(), 4)
+                        // fill the remainder so we have stripes to the end of the panel
+                        .column(egui_extras::Column::remainder())
+                        .vscroll(false)
+                        .striped(true)
+                        .sense(egui::Sense::click())
+                        .body(|mut body| {
+                            self.show_grid_content(
+                                project,
+                                &mut body,
+                                &mut grid_items,
+                                &mut jumps,
+                                &mut colx,
+                            );
+                        });
+                    if let Some(colx) = colx {
+                        let rect = egui::Rect::everything_right_of(colx).intersect(old_remains);
+                        ui.allocate_rect(rect, egui::Sense::empty());
+                        let painter = ui.painter();
+                        let x = rect.min.x;
+                        let mut jump_ys: Vec<_> = jumps
+                            .into_iter()
+                            .filter_map(|(dst, srcs)| {
+                                let dst = grid_items.get(&dst).copied()?;
+                                let srcs: Vec<_> = srcs
+                                    .into_iter()
+                                    .filter_map(|src| grid_items.get(&src).copied())
+                                    .collect();
+                                let srcmin = srcs.iter().copied().min_by(f32::total_cmp)?;
+                                let srcmax = srcs.iter().copied().max_by(f32::total_cmp)?;
+                                Some((srcs, dst, srcmin.min(dst), srcmax.max(dst)))
+                            })
+                            .collect();
+                        jump_ys.sort_unstable_by(|(_, d1, a1, b1), (.., d2, a2, b2)| {
+                            (b1 - a1).total_cmp(&(b2 - a2)).then(d1.total_cmp(d2))
+                        });
+                        let mut layers: Vec<usize> = vec![];
+                        for (s, d, ymin1, ymax1) in &jump_ys {
+                            let ly = jump_ys
+                                .iter()
+                                .zip(&layers)
+                                .filter(|((.., ymin2, ymax2), _)| ymin1 <= ymax2 && ymax1 >= ymin2)
+                                .map(|(_, ly)| *ly)
+                                .max()
+                                .map(|ly| ly + 1)
+                                .unwrap_or(0);
+                            layers.push(ly);
+                            let x2 =
+                                x + ly as f32 * GRID_JUMPARROW_INDENT + GRID_JUMPARROW_INDENT_START;
+                            let color = calculate_visually_distinct_color(ly as _);
+
+                            for y in s.iter().chain([d]).copied() {
+                                if y == *ymin1 || y == *ymax1 {
+                                    continue;
+                                }
+                                painter.hline(x..=x2, y, (GRID_JUMPARROW_WIDTH, color));
+                            }
+                            painter.line(
+                                vec![
+                                    egui::Pos2::new(x, *ymin1),
+                                    egui::Pos2::new(x2, *ymin1),
+                                    egui::Pos2::new(x2, *ymax1),
+                                    egui::Pos2::new(x, *ymax1),
+                                ],
+                                (GRID_JUMPARROW_WIDTH, color),
+                            );
+                            painter.add(egui::epaint::PathShape {
+                                points: vec![
+                                    egui::Pos2::new(x - 6.0, *d),
+                                    egui::Pos2::new(x + 1.0, *d + 6.0),
+                                    egui::Pos2::new(x + 1.0, *d - 6.0),
+                                ],
+                                closed: true,
+                                fill: color,
+                                stroke: egui::epaint::PathStroke::NONE,
+                            });
+                        }
+                    }
+                });
+            })
+            .response
+            .rect;
+
+        if ui.rect_contains_pointer(rect) {
             let scroll_speed = ui.ctx().options(|opt| opt.line_scroll_speed) * SCROLL_SPEED_FACTOR;
             let delta =
                 ui.input_mut(|inp| core::mem::take(&mut inp.smooth_scroll_delta.y)) * scroll_speed;
@@ -185,117 +302,6 @@ impl DisassemblyView {
                 self.start_addr = self.start_addr.add24(steps);
             }
         }
-
-        ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    let btn = egui::Button::new("");
-                    if ui.add_enabled(self.jump_list.can_undo(), btn).clicked() {
-                        if let Some(dst) = self.jump_list.undo(self.start_addr) {
-                            self.start_addr = dst;
-                        }
-                    }
-                    let btn = egui::Button::new("");
-                    if ui.add_enabled(self.jump_list.can_redo(), btn).clicked() {
-                        if let Some(dst) = self.jump_list.redo() {
-                            self.start_addr = dst;
-                        }
-                    }
-                    let old_start_addr = self.start_addr;
-                    ui.add(
-                        crate::addr_widget::addr_drag(&mut self.start_addr)
-                            .update_while_editing(false),
-                    );
-                    if old_start_addr.to_u32().abs_diff(self.start_addr.to_u32()) > 0x100 {
-                        self.jump_list.jump(old_start_addr, self.start_addr);
-                    }
-                });
-                ui.separator();
-                let mut grid_items = HashMap::new();
-                let mut jumps = HashMap::new();
-                let mut colx = None;
-                let old_remains = ui.available_rect_before_wrap();
-                egui_extras::TableBuilder::new(ui)
-                    .columns(egui_extras::Column::auto(), 4)
-                    // fill the remainder so we have stripes to the end of the panel
-                    .column(egui_extras::Column::remainder())
-                    .vscroll(false)
-                    .striped(true)
-                    .sense(egui::Sense::click())
-                    .body(|mut body| {
-                        self.show_grid_content(
-                            project,
-                            &mut body,
-                            &mut grid_items,
-                            &mut jumps,
-                            &mut colx,
-                        );
-                    });
-                if let Some(colx) = colx {
-                    let rect = egui::Rect::everything_right_of(colx).intersect(old_remains);
-                    ui.allocate_rect(rect, egui::Sense::empty());
-                    let painter = ui.painter();
-                    let x = rect.min.x;
-                    let mut jump_ys: Vec<_> = jumps
-                        .into_iter()
-                        .filter_map(|(dst, srcs)| {
-                            let dst = grid_items.get(&dst).copied()?;
-                            let srcs: Vec<_> = srcs
-                                .into_iter()
-                                .filter_map(|src| grid_items.get(&src).copied())
-                                .collect();
-                            let srcmin = srcs.iter().copied().min_by(f32::total_cmp)?;
-                            let srcmax = srcs.iter().copied().max_by(f32::total_cmp)?;
-                            Some((srcs, dst, srcmin.min(dst), srcmax.max(dst)))
-                        })
-                        .collect();
-                    jump_ys.sort_unstable_by(|(_, d1, a1, b1), (.., d2, a2, b2)| {
-                        (b1 - a1).total_cmp(&(b2 - a2)).then(d1.total_cmp(d2))
-                    });
-                    let mut layers: Vec<usize> = vec![];
-                    for (s, d, ymin1, ymax1) in &jump_ys {
-                        let ly = jump_ys
-                            .iter()
-                            .zip(&layers)
-                            .filter(|((.., ymin2, ymax2), _)| ymin1 <= ymax2 && ymax1 >= ymin2)
-                            .map(|(_, ly)| *ly)
-                            .max()
-                            .map(|ly| ly + 1)
-                            .unwrap_or(0);
-                        layers.push(ly);
-                        let x2 =
-                            x + ly as f32 * GRID_JUMPARROW_INDENT + GRID_JUMPARROW_INDENT_START;
-                        let color = calculate_visually_distinct_color(ly as _);
-
-                        for y in s.iter().chain([d]).copied() {
-                            if y == *ymin1 || y == *ymax1 {
-                                continue;
-                            }
-                            painter.hline(x..=x2, y, (GRID_JUMPARROW_WIDTH, color));
-                        }
-                        painter.line(
-                            vec![
-                                egui::Pos2::new(x, *ymin1),
-                                egui::Pos2::new(x2, *ymin1),
-                                egui::Pos2::new(x2, *ymax1),
-                                egui::Pos2::new(x, *ymax1),
-                            ],
-                            (GRID_JUMPARROW_WIDTH, color),
-                        );
-                        painter.add(egui::epaint::PathShape {
-                            points: vec![
-                                egui::Pos2::new(x - 6.0, *d),
-                                egui::Pos2::new(x + 1.0, *d + 6.0),
-                                egui::Pos2::new(x + 1.0, *d - 6.0),
-                            ],
-                            closed: true,
-                            fill: color,
-                            stroke: egui::epaint::PathStroke::NONE,
-                        });
-                    }
-                }
-            });
-        });
     }
 
     fn show_byte(project: &Project, addr: Addr, ui: &mut egui::Ui) {
@@ -837,6 +843,13 @@ impl DisassemblyView {
         }
         let call_stack = self.selected_callstack.as_mut().unwrap();
         let mut selected = &*call_stack;
+        ui.horizontal(|ui| {
+            ui.heading(format!("{addr}"));
+            if ui.button(" ").clicked() {
+                self.start_addr = addr;
+            }
+        });
+        ui.separator();
         egui::ComboBox::from_label("Call Stack")
             .selected_text(call_stack_to_text(selected))
             .show_ui(ui, |ui| {
@@ -861,90 +874,104 @@ impl DisassemblyView {
     }
 
     fn show_sidepanel(&mut self, project: &Project, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("Selection")
-            .default_open(true)
-            .enabled(self.selected_addr.is_some())
-            .show(ui, |ui| {
-                ui.vertical(|ui| {
-                    if let Some((_addr, annotation)) = self.show_sidepanel_call_stack(project, ui) {
-                        let ctx = &annotation.pre;
-                        ui.group(|ui| {
-                            ui.heading("Registers");
-                            egui::Grid::new("sidepanel-register-grid")
-                                .num_columns(3)
-                                .min_col_width(0.0)
-                                .show(ui, |ui| {
-                                    self.show_reg16("A", ctx.a, ctx.mf(), ui);
-                                    ui.end_row();
-                                    self.show_reg16("D", ctx.d, false, ui);
-                                    ui.end_row();
-                                    self.show_reg16("X", ctx.x, ctx.xf(), ui);
-                                    ui.end_row();
-                                    self.show_reg16("Y", ctx.y, ctx.xf(), ui);
-                                    ui.end_row();
-                                    self.show_reg8("B", ctx.b, false, ui);
-                                    ui.end_row();
-                                    self.show_reg8("P", ctx.p, true, ui);
-                                    ui.end_row();
-                                });
+        ui.vertical(|ui| {
+            if let Some((_addr, annotation)) = self.show_sidepanel_call_stack(project, ui) {
+                ui.separator();
+                let ctx = &annotation.pre;
+                ui.group(|ui| {
+                    ui.heading("Registers");
+                    ui.separator();
+                    egui::Grid::new("sidepanel-register-grid")
+                        .num_columns(3)
+                        .min_col_width(0.0)
+                        .show(ui, |ui| {
+                            self.show_reg16("A", ctx.a, ctx.mf(), ui);
+                            ui.end_row();
+                            self.show_reg16("D", ctx.d, false, ui);
+                            ui.end_row();
+                            self.show_reg16("X", ctx.x, ctx.xf(), ui);
+                            ui.end_row();
+                            self.show_reg16("Y", ctx.y, ctx.xf(), ui);
+                            ui.end_row();
+                            self.show_reg8("B", ctx.b, false, ui);
+                            ui.end_row();
+                            self.show_reg8("P", ctx.p, true, ui);
+                            ui.end_row();
                         });
-                        ui.group(|ui| {
-                            ui.heading("Stack");
-                            ui.separator();
-                            egui::ScrollArea::vertical().show(ui, |ui| {
-                                egui::Grid::new("sidepanel-stack-grid").num_columns(2).show(
+                });
+                ui.separator();
+                ui.group(|ui| {
+                    ui.heading("Stack");
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        egui::Grid::new("sidepanel-stack-grid")
+                            .num_columns(2)
+                            .show(ui, |ui| {
+                                for i in &ctx.stack.items {
+                                    ui.horizontal(|ui| {
+                                        self.show_tu8_hex(*i, ui);
+                                        self.show_tu4_bin(*i, true, false, ui);
+                                        self.show_tu4_bin(*i, false, false, ui);
+                                    });
+                                    ui.end_row();
+                                }
+                            });
+                    });
+                });
+                ui.separator();
+                ui.group(|ui| {
+                    ui.heading("Memory");
+                    ui.separator();
+                    ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("sidepanel-mem-scroll")
+                            .show(ui, |ui| {
+                                egui::Grid::new("sidepanel-mem-grid").num_columns(2).show(
                                     ui,
                                     |ui| {
-                                        for i in &ctx.stack.items {
+                                        for (a, v) in ctx.map.iter() {
+                                            let Some(addr) = project.smw.cart.reverse_map(*a)
+                                            else {
+                                                continue;
+                                            };
+                                            ui.label(
+                                                egui::RichText::new(addr.to_string())
+                                                    .monospace()
+                                                    .weak(),
+                                            );
                                             ui.horizontal(|ui| {
-                                                self.show_tu8_hex(*i, ui);
-                                                self.show_tu4_bin(*i, true, false, ui);
-                                                self.show_tu4_bin(*i, false, false, ui);
+                                                self.show_tu8_hex(*v, ui);
+                                                self.show_tu4_bin(*v, true, false, ui);
+                                                self.show_tu4_bin(*v, false, false, ui);
+                                                ui.add_space(ui.available_width());
                                             });
                                             ui.end_row();
                                         }
                                     },
                                 );
                             });
-                        });
-                        ui.group(|ui| {
-                            ui.heading("Memory");
-                            ui.separator();
-                            egui::ScrollArea::vertical()
-                                .id_salt("sidepanel-mem-scroll")
-                                .show(ui, |ui| {
-                                    egui::Grid::new("sidepanel-mem-grid").num_columns(2).show(
-                                        ui,
-                                        |ui| {
-                                            for (a, v) in ctx.map.iter() {
-                                                let Some(addr) = project.smw.cart.reverse_map(*a)
-                                                else {
-                                                    continue;
-                                                };
-                                                ui.horizontal(|ui| {
-                                                    ui.label(
-                                                        egui::RichText::new(addr.to_string())
-                                                            .monospace()
-                                                            .weak(),
-                                                    );
-                                                    self.show_tu8_hex(*v, ui);
-                                                    self.show_tu4_bin(*v, true, false, ui);
-                                                    self.show_tu4_bin(*v, false, false, ui);
-                                                });
-                                                ui.end_row();
-                                            }
-                                        },
-                                    );
-                                });
-                        });
-                    }
+                    });
                 });
-            });
+            }
+        });
     }
 }
 
 impl crate::app::App {
     pub fn show_disassembly(&mut self, ctx: &egui::Context) {
+        if let Some(project) = &self.project.project {
+            egui::SidePanel::right("disassembly-sidepanel")
+                .resizable(true)
+                .width_range(..)
+                .max_width(f32::INFINITY)
+                .show_animated(ctx, self.disassembly_view.selected_addr.is_some(), |ui| {
+                    ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            self.disassembly_view.show_sidepanel(project, ui);
+                        });
+                    });
+                });
+        }
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(project) = &self.project.project {
                 self.disassembly_view.show_grid(project, ui);
@@ -952,19 +979,5 @@ impl crate::app::App {
                 ui.centered_and_justified(|ui| ui.strong("no cartridge loaded yet"));
             }
         });
-        let Some(project) = &self.project.project else {
-            return;
-        };
-        egui::SidePanel::right("disassembly-sidepanel")
-            .resizable(true)
-            .width_range(..)
-            .max_width(f32::INFINITY)
-            .show(ctx, |ui| {
-                ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        self.disassembly_view.show_sidepanel(project, ui);
-                    });
-                });
-            });
     }
 }
