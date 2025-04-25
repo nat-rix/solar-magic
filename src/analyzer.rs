@@ -10,6 +10,7 @@ use crate::{
     },
     pf::*,
     tvl::{TBool, TU8, TU16, TU24, TUnknown},
+    vecmap::VecMap,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,7 +113,7 @@ pub struct Context {
     pub d: TU16,
     pub p: TU8,
     pub pc: Addr,
-    pub map: BTreeMap<MemoryLocation, TU8>,
+    pub map: VecMap<MemoryLocation, TU8>,
     pub stack: Stack,
 }
 
@@ -401,10 +402,10 @@ pub enum CallStackRoot {
     Table(Addr),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CallStackItem {
-    pub is_long: bool,
     pub addr: Addr,
+    pub is_long: bool,
 }
 
 impl CallStackItem {
@@ -474,6 +475,31 @@ impl CallStack {
 
     pub const fn root(&self) -> &CallStackRoot {
         &self.root
+    }
+}
+
+impl core::cmp::PartialOrd for CallStack {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl core::cmp::Ord for CallStack {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        fn score(v: &CallStack) -> impl core::cmp::Ord {
+            (
+                match &v.root {
+                    CallStackRoot::Vector(0xfffc) => 0,
+                    CallStackRoot::Vector(0xffea) => 1,
+                    CallStackRoot::Vector(0xffee) => 2,
+                    CallStackRoot::Vector(_) => 3,
+                    CallStackRoot::Table(_) => 4,
+                },
+                v.len(),
+                v.items.as_slice(),
+            )
+        }
+        score(self).cmp(&score(other))
     }
 }
 
@@ -557,10 +583,9 @@ pub struct Head {
 
 #[derive(Clone)]
 pub struct Analyzer {
-    pub code_annotations: BTreeMap<Addr, HashMap<CallStack, AnnotatedInstruction>>,
-    pub shortest_callstacks: HashMap<Addr, CallStack>,
+    pub code_annotations: BTreeMap<Addr, VecMap<CallStack, AnnotatedInstruction>>,
     pub jump_tables: BTreeMap<Addr, JumpTable>,
-    pub jump_table_items: BTreeMap<Addr, Addr>,
+    pub jump_table_items: HashMap<Addr, Addr>,
     heads: Vec<Head>,
 }
 
@@ -568,9 +593,8 @@ impl Analyzer {
     pub fn new() -> Self {
         Self {
             code_annotations: BTreeMap::new(),
-            shortest_callstacks: HashMap::new(),
             jump_tables: BTreeMap::new(),
-            jump_table_items: BTreeMap::new(),
+            jump_table_items: HashMap::new(),
             heads: vec![],
         }
     }
@@ -587,9 +611,7 @@ impl Analyzer {
         &self,
         addr: Addr,
     ) -> Option<(&CallStack, &AnnotatedInstruction)> {
-        let call_stack = self.shortest_callstacks.get(&addr)?;
-        self.get_annotation(addr, call_stack)
-            .map(|a| (call_stack, a))
+        self.code_annotations.get(&addr)?.iter().next()
     }
 
     pub fn add_vector(&mut self, cart: &Cart, vec: u16) {
@@ -606,7 +628,7 @@ impl Analyzer {
             d: 0.into(),
             p: (M | X | I).into(),
             pc: Addr::new(0, addr),
-            map: BTreeMap::new(),
+            map: VecMap::new(),
             stack: Default::default(),
         };
         let head = Head {
@@ -893,26 +915,6 @@ impl Analyzer {
             }
             break;
         }
-        self.shortest_callstacks = self
-            .code_annotations
-            .iter()
-            .filter_map(|(k, v)| {
-                v.keys()
-                    .min_by_key(|v| {
-                        (
-                            match &v.root {
-                                CallStackRoot::Vector(0xfffc) => 0,
-                                CallStackRoot::Vector(0xffea) => 1,
-                                CallStackRoot::Vector(0xffee) => 2,
-                                CallStackRoot::Vector(_) => 3,
-                                CallStackRoot::Table(_) => 4,
-                            },
-                            v.len(),
-                        )
-                    })
-                    .map(|v| (*k, v.clone()))
-            })
-            .collect();
         self.jump_table_items = self
             .jump_tables
             .iter()

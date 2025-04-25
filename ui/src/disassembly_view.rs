@@ -345,15 +345,9 @@ impl DisassemblyView {
                     ui.label(egui::RichText::new(addr.to_string()).monospace().weak());
                 });
 
-                let call_stack = project.analyzer.shortest_callstacks.get(&addr);
-                let opt_annotation = call_stack.and_then(|call_stack| {
-                    project
-                        .analyzer
-                        .code_annotations
-                        .get(&addr)?
-                        .get(call_stack)
-                        .map(|i| (call_stack, i))
-                });
+                let opt_annotation = project
+                    .analyzer
+                    .get_annotation_with_shortest_callstack(addr);
 
                 if let Some((_call_stack, instr)) = opt_annotation {
                     let opcode = instr.instruction.opcode();

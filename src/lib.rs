@@ -6,6 +6,7 @@ mod crc32;
 pub mod instruction;
 pub mod original_cart;
 pub mod tvl;
+mod vecmap;
 
 pub mod pf {
     pub const C: u8 = 1 << 0;
