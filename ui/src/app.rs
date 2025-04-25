@@ -31,7 +31,7 @@ impl App {
         crate::theme::set_style(&ctx.egui_ctx);
         crate::fonts::set_fonts(&ctx.egui_ctx);
         if let Some(path) = args.rom_path {
-            slf.project.load(&ctx.egui_ctx, path);
+            slf.project.load_cart(&ctx.egui_ctx, path);
         }
         slf
     }

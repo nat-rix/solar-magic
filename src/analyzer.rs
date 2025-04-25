@@ -393,7 +393,6 @@ impl Context {
 pub struct AnnotatedInstruction {
     pub instruction: Instruction,
     pub pre: Context,
-    pub dst: Vec<Addr>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -978,17 +977,11 @@ impl Analyzer {
         }
 
         let pc = head.ctx.pc;
-        let old_head_count = self.heads.len();
         match self.analyze_head(cart, head.clone()) {
             Ok(instruction) => {
-                let dst = self.heads[old_head_count..]
-                    .iter()
-                    .map(|h| h.ctx.pc)
-                    .collect();
                 let annotation = AnnotatedInstruction {
                     instruction,
                     pre: head.ctx,
-                    dst,
                 };
                 self.code_annotations
                     .entry(pc)

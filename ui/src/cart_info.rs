@@ -8,8 +8,8 @@ impl crate::app::App {
             .collapsible(false)
             .default_pos(ctx.screen_rect().center())
             .show(ctx, |ui| {
-                if let Some(project) = &self.project.project {
-                    let hdr = &project.smw.header;
+                if let Some(cart) = &self.project.cart {
+                    let hdr = &cart.header;
                     egui::Grid::new("cart-info-grid")
                         .num_columns(2)
                         .striped(true)
@@ -19,7 +19,7 @@ impl crate::app::App {
                             ui.end_row();
 
                             ui.strong("Edition");
-                            ui.label(match project.smw.edition {
+                            ui.label(match cart.edition {
                                 solar_magic::original_cart::Edition::International => {
                                     "International"
                                 }
@@ -35,7 +35,7 @@ impl crate::app::App {
                             ui.end_row();
 
                             ui.strong("Mapping Type");
-                            ui.label(match project.smw.cart.cfg.mapping_type {
+                            ui.label(match cart.cart.cfg.mapping_type {
                                 solar_magic::cart::MappingType::LoRom => "LoRom",
                                 solar_magic::cart::MappingType::HiRom => "HiRom",
                                 solar_magic::cart::MappingType::ExHiRom => "ExHiRom",
@@ -44,11 +44,11 @@ impl crate::app::App {
                             ui.end_row();
 
                             ui.strong("ROM size");
-                            ui.label(project.smw.header.rom_size.to_string());
+                            ui.label(cart.header.rom_size.to_string());
                             ui.end_row();
 
                             ui.strong("SRAM size");
-                            ui.label(project.smw.header.ram_size.to_string());
+                            ui.label(cart.header.ram_size.to_string());
                             ui.end_row();
                         });
                 } else {

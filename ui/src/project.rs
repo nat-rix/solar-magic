@@ -1,78 +1,145 @@
-use eframe::egui;
+use eframe::egui::{self, mutex::Mutex};
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
+    sync::{
+        Arc,
+        mpsc::{Receiver, Sender},
+    },
     thread::JoinHandle,
 };
 
 use solar_magic::{analyzer::Analyzer, cart::Cart, original_cart::OriginalCart};
 
+#[derive(Clone)]
+enum LoaderMsg {
+    FileOpen(Option<PathBuf>),
+    NewCart(Arc<OriginalCart>),
+    NewAnalyzer(Analyzer),
+    IoError(Arc<std::io::Error>),
+}
+
+struct LoaderThread {
+    handle: JoinHandle<()>,
+    description: Arc<Mutex<Option<String>>>,
+}
+
 pub struct AppProject {
-    picker: Option<JoinHandle<Option<PathBuf>>>,
-    loader: Option<JoinHandle<Result<Project, std::io::Error>>>,
-    pub project: Option<Project>,
+    send: Sender<LoaderMsg>,
+    recv: Receiver<LoaderMsg>,
+    threads: Vec<LoaderThread>,
+    is_picker_open: bool,
+    pub cart: Option<Arc<OriginalCart>>,
+    pub analyzer: Option<Analyzer>,
 }
 
 impl AppProject {
     pub fn new() -> Self {
+        let (send, recv) = std::sync::mpsc::channel();
         Self {
-            picker: None,
-            loader: None,
-            project: None,
+            send,
+            recv,
+            threads: vec![],
+            is_picker_open: false,
+            cart: None,
+            analyzer: None,
         }
     }
 
-    pub fn load(&mut self, ctx: &egui::Context, path: PathBuf) {
-        let ctx = ctx.clone();
-        self.loader = Some(std::thread::spawn(move || {
-            let res = Project::load(path);
-            ctx.request_repaint();
-            res
-        }));
+    pub fn get_description(&self) -> Option<String> {
+        let items: Vec<String> = self
+            .threads
+            .iter()
+            .filter_map(|t| t.description.lock().as_ref().cloned())
+            .collect();
+        if items.is_empty() {
+            None
+        } else {
+            Some(items.join(", "))
+        }
     }
 
-    pub fn update(&mut self, ctx: &egui::Context, on_err: impl FnOnce(std::io::Error)) {
-        if let Some(picker) = self.picker.take_if(|handle| handle.is_finished()) {
-            if let Some(path) = picker.join().ok().flatten() {
-                self.load(ctx, path);
+    fn spawn_thread(
+        &mut self,
+        ctx: Option<&egui::Context>,
+        f: impl FnOnce(&Sender<LoaderMsg>, &Mutex<Option<String>>) + Send + 'static,
+    ) {
+        let ctx = ctx.cloned();
+        let send = self.send.clone();
+        let description = Arc::new(Mutex::new(None));
+        let desc = description.clone();
+        let handle = std::thread::spawn(move || {
+            f(&send, &desc);
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+        self.threads.push(LoaderThread {
+            handle,
+            description,
+        })
+    }
+
+    pub fn update(&mut self, ctx: &egui::Context, mut on_err: impl FnMut(&std::io::Error)) {
+        while let Ok(msg) = self.recv.try_recv() {
+            match msg {
+                LoaderMsg::FileOpen(path) => {
+                    self.is_picker_open = false;
+                    if let Some(path) = path {
+                        self.load_cart(ctx, path);
+                    }
+                }
+                LoaderMsg::NewCart(cart) => {
+                    self.start_analyzer(ctx, cart.clone());
+                    self.cart = Some(cart);
+                }
+                LoaderMsg::NewAnalyzer(analyzer) => {
+                    self.analyzer = Some(analyzer);
+                }
+                LoaderMsg::IoError(err) => on_err(&err),
             }
         }
-        if let Some(loader) = self.loader.take_if(|handle| handle.is_finished()) {
-            let failable_project = loader
-                .join()
-                .map_err(|_| std::io::Error::other("loader thread died"))
-                .and_then(core::convert::identity);
-            match failable_project {
-                Ok(project) => self.project = Some(project),
-                Err(err) => on_err(err),
-            }
+        self.threads
+            .extract_if(.., |thread| thread.handle.is_finished())
+            .filter_map(|thread| thread.handle.join().err())
+            .for_each(|_err| {
+                on_err(&std::io::Error::other("loader thread died"));
+            });
+    }
+
+    pub fn load_cart(&mut self, ctx: &egui::Context, path: PathBuf) {
+        fn load_cart(path: PathBuf) -> std::io::Result<OriginalCart> {
+            let bytes = std::fs::read(path)?;
+            let cart = Cart::from_bytes(bytes);
+            OriginalCart::new(cart)
+                .map_err(|_| std::io::Error::other("not an original Super Mario World cart"))
         }
+        self.spawn_thread(Some(ctx), |sender, desc| {
+            *desc.lock() = Some("Loading cartridge".to_string());
+            let res = load_cart(path);
+            let _err = match res {
+                Ok(cart) => sender.send(LoaderMsg::NewCart(Arc::new(cart))),
+                Err(err) => sender.send(LoaderMsg::IoError(Arc::new(err))),
+            };
+        });
+    }
+
+    pub fn start_analyzer(&mut self, ctx: &egui::Context, cart: Arc<OriginalCart>) {
+        self.spawn_thread(Some(ctx), move |sender, desc| {
+            *desc.lock() = Some("Analyze cartridge binary".to_string());
+            let mut analyzer = solar_magic::analyzer::Analyzer::new();
+            analyzer.add_vectors(&cart.cart);
+            analyzer.analyze(&cart.cart);
+            let _err = sender.send(LoaderMsg::NewAnalyzer(analyzer));
+        });
     }
 
     pub fn start_file_picker(&mut self) {
-        if self.picker.is_some() {
+        if self.is_picker_open {
             return;
         }
-        self.picker = Some(std::thread::spawn(|| rfd::FileDialog::new().pick_file()));
-    }
-}
-
-#[derive(Clone)]
-pub struct Project {
-    pub smw: OriginalCart,
-    pub analyzer: Analyzer,
-}
-
-impl Project {
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
-        let bytes = std::fs::read(path)?;
-        let cart = Cart::from_bytes(bytes);
-        let smw = OriginalCart::new(cart)
-            .map_err(|_| std::io::Error::other("not an original Super Mario World cart"))?;
-
-        let mut analyzer = solar_magic::analyzer::Analyzer::new();
-        analyzer.add_vectors(&smw.cart);
-        analyzer.analyze(&smw.cart);
-
-        Ok(Self { smw, analyzer })
+        self.is_picker_open = true;
+        self.spawn_thread(None, move |sender, _| {
+            let _err = sender.send(LoaderMsg::FileOpen(rfd::FileDialog::new().pick_file()));
+        });
     }
 }

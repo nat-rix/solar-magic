@@ -2,12 +2,12 @@ use eframe::egui;
 use egui::ahash::{HashMap, HashMapExt};
 use solar_magic::{
     addr::Addr,
-    analyzer::{AnnotatedInstruction, CallStack, CallStackRoot, JumpTableType},
+    analyzer::{Analyzer, AnnotatedInstruction, CallStack, CallStackRoot, JumpTableType},
+    cart::Cart,
     instruction::{InstructionArgument, InstructionNamingConvention, OpCode},
+    original_cart::OriginalCart,
     tvl::{TBool, TU8, TU16, TU24},
 };
-
-use crate::project::Project;
 
 const SCROLL_SPEED_FACTOR: f32 = 0.1;
 const GRID_ROW_HEIGHT: f32 = 20.0;
@@ -169,7 +169,7 @@ impl DisassemblyView {
         }
     }
 
-    fn show_grid(&mut self, project: &Project, ui: &mut egui::Ui) {
+    fn show_grid(&mut self, cart: &Cart, analyzer: Option<&Analyzer>, ui: &mut egui::Ui) {
         let rect = ui
             .with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
                 ui.vertical(|ui| {
@@ -212,7 +212,8 @@ impl DisassemblyView {
                         .sense(egui::Sense::click())
                         .body(|mut body| {
                             self.show_grid_content(
-                                project,
+                                cart,
+                                analyzer,
                                 &mut body,
                                 &mut grid_items,
                                 &mut jumps,
@@ -304,25 +305,26 @@ impl DisassemblyView {
         }
     }
 
-    fn show_byte(project: &Project, addr: Addr, ui: &mut egui::Ui) {
-        if let Some(byte) = project.smw.cart.read_rom(addr) {
+    fn show_byte(cart: &Cart, addr: Addr, ui: &mut egui::Ui) {
+        if let Some(byte) = cart.read_rom(addr) {
             ui.monospace(format!("{byte:02x}"));
         } else {
             ui.monospace("??");
         }
     }
 
-    fn show_bytes(project: &Project, iter: impl IntoIterator<Item = Addr>, ui: &mut egui::Ui) {
+    fn show_bytes(cart: &Cart, iter: impl IntoIterator<Item = Addr>, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             for i in iter {
-                Self::show_byte(project, i, ui);
+                Self::show_byte(cart, i, ui);
             }
         });
     }
 
     fn show_grid_content(
         &mut self,
-        project: &Project,
+        cart: &Cart,
+        analyzer: Option<&Analyzer>,
         body: &mut egui_extras::TableBody,
         grid_items: &mut HashMap<Addr, f32>,
         jumps: &mut HashMap<Addr, Vec<Addr>>,
@@ -345,9 +347,8 @@ impl DisassemblyView {
                     ui.label(egui::RichText::new(addr.to_string()).monospace().weak());
                 });
 
-                let opt_annotation = project
-                    .analyzer
-                    .get_annotation_with_shortest_callstack(addr);
+                let opt_annotation = analyzer
+                    .and_then(|analyzer| analyzer.get_annotation_with_shortest_callstack(addr));
 
                 if let Some((_call_stack, instr)) = opt_annotation {
                     let opcode = instr.instruction.opcode();
@@ -355,11 +356,7 @@ impl DisassemblyView {
                     let arg = instr.instruction.arg();
 
                     row.col(|ui| {
-                        Self::show_bytes(
-                            project,
-                            (0..instr_size).map(|i| addr.add16(i.into())),
-                            ui,
-                        );
+                        Self::show_bytes(cart, (0..instr_size).map(|i| addr.add16(i.into())), ui);
                     });
 
                     row.col(|ui| {
@@ -368,27 +365,28 @@ impl DisassemblyView {
 
                     row.col(|ui| {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                            self.show_helpers(project, instr, arg, addr, jumps, ui);
+                            self.show_helpers(cart, instr, arg, addr, jumps, ui);
                         });
                     });
 
                     addr = addr.add24(instr_size.into());
-                } else if let Some(table_start) = project.analyzer.jump_table_items.get(&addr) {
-                    let table = project.analyzer.jump_tables.get(&table_start).unwrap();
+                } else if let Some((analyzer, table_start)) = analyzer.and_then(|analyzer| {
+                    analyzer
+                        .jump_table_items
+                        .get(&addr)
+                        .map(|table_start| (analyzer, table_start))
+                }) {
+                    let table = analyzer.jump_tables.get(&table_start).unwrap();
                     let entry_size = table.ty.entry_size();
 
                     row.col(|ui| {
-                        Self::show_bytes(
-                            project,
-                            (0..entry_size).map(|i| addr.add16(i.into())),
-                            ui,
-                        );
+                        Self::show_bytes(cart, (0..entry_size).map(|i| addr.add16(i.into())), ui);
                     });
 
-                    let lo = OptByte(project.smw.cart.read_rom(addr));
-                    let hi = OptByte(project.smw.cart.read_rom(addr.add16(1)));
+                    let lo = OptByte(cart.read_rom(addr));
+                    let hi = OptByte(cart.read_rom(addr.add16(1)));
                     let ba = OptByte(if let JumpTableType::Addr24 = table.ty {
-                        project.smw.cart.read_rom(addr.add16(2))
+                        cart.read_rom(addr.add16(2))
                     } else {
                         None
                     });
@@ -432,14 +430,14 @@ impl DisassemblyView {
                                 Addr::new(table_start.bank, lohi)
                             };
                             jumps.entry(entry).or_insert_with(|| vec![]).push(addr);
-                            self.show_addr_helper(project, entry, true, ui);
+                            self.show_addr_helper(entry, true, ui);
                         });
                     });
 
                     addr = addr.add24(entry_size.into());
                 } else {
                     row.col(|ui| {
-                        Self::show_bytes(project, [addr], ui);
+                        Self::show_bytes(cart, [addr], ui);
                     });
                     row.col(|ui| {
                         ui.label("<data byte>");
@@ -603,13 +601,7 @@ impl DisassemblyView {
         });
     }
 
-    fn show_addr_helper(
-        &mut self,
-        _project: &Project,
-        addr: impl Into<TU24>,
-        isjmp: bool,
-        ui: &mut egui::Ui,
-    ) {
+    fn show_addr_helper(&mut self, addr: impl Into<TU24>, isjmp: bool, ui: &mut egui::Ui) {
         let Some(addr) = addr.into().get() else {
             return;
         };
@@ -636,7 +628,7 @@ impl DisassemblyView {
 
     fn show_helpers(
         &mut self,
-        project: &Project,
+        cart: &Cart,
         instr: &AnnotatedInstruction,
         arg: Option<InstructionArgument>,
         addr: Addr,
@@ -648,45 +640,40 @@ impl DisassemblyView {
         };
         let mut add_jump = |s, d| jumps.entry(d).or_insert(vec![]).push(s);
         let ctx = &instr.pre;
-        let cart = &project.smw.cart;
         match arg {
             InstructionArgument::Signature(_) => (),
-            InstructionArgument::A(a) => {
-                self.show_addr_helper(project, ctx.resolve_a(cart, &a), false, ui)
-            }
+            InstructionArgument::A(a) => self.show_addr_helper(ctx.resolve_a(cart, &a), false, ui),
             InstructionArgument::Ax(a) => {
-                self.show_addr_helper(project, ctx.resolve_ax(cart, &a), false, ui)
+                self.show_addr_helper(ctx.resolve_ax(cart, &a), false, ui)
             }
             InstructionArgument::Ay(a) => {
-                self.show_addr_helper(project, ctx.resolve_ay(cart, &a), false, ui)
+                self.show_addr_helper(ctx.resolve_ay(cart, &a), false, ui)
             }
             InstructionArgument::Al(a) => {
-                self.show_addr_helper(project, ctx.resolve_al(cart, &a), false, ui)
+                self.show_addr_helper(ctx.resolve_al(cart, &a), false, ui)
             }
             InstructionArgument::Alx(a) => {
-                self.show_addr_helper(project, ctx.resolve_alx(cart, &a), false, ui)
+                self.show_addr_helper(ctx.resolve_alx(cart, &a), false, ui)
             }
-            InstructionArgument::D(a) => {
-                self.show_addr_helper(project, ctx.resolve_d(cart, &a), false, ui)
-            }
+            InstructionArgument::D(a) => self.show_addr_helper(ctx.resolve_d(cart, &a), false, ui),
             InstructionArgument::Dx(a) => {
-                self.show_addr_helper(project, ctx.resolve_dx(cart, &a), false, ui)
+                self.show_addr_helper(ctx.resolve_dx(cart, &a), false, ui)
             }
             InstructionArgument::Dy(a) => {
-                self.show_addr_helper(project, ctx.resolve_dy(cart, &a), false, ui)
+                self.show_addr_helper(ctx.resolve_dy(cart, &a), false, ui)
             }
             InstructionArgument::Dxi(a) => todo!(),
             InstructionArgument::Diy(a) => {
-                self.show_addr_helper(project, ctx.resolve_diy(cart, &a), false, ui)
+                self.show_addr_helper(ctx.resolve_diy(cart, &a), false, ui)
             }
             InstructionArgument::Dily(a) => {
-                self.show_addr_helper(project, ctx.resolve_dily(cart, &a), false, ui)
+                self.show_addr_helper(ctx.resolve_dily(cart, &a), false, ui)
             }
             InstructionArgument::Di(a) => {
-                self.show_addr_helper(project, ctx.resolve_di(cart, &a), false, ui)
+                self.show_addr_helper(ctx.resolve_di(cart, &a), false, ui)
             }
             InstructionArgument::Dil(a) => {
-                self.show_addr_helper(project, ctx.resolve_dil(cart, &a), false, ui)
+                self.show_addr_helper(ctx.resolve_dil(cart, &a), false, ui)
             }
             InstructionArgument::S(a) => todo!(),
             InstructionArgument::Siy(a) => todo!(),
@@ -694,21 +681,21 @@ impl DisassemblyView {
             InstructionArgument::NearLabel(a) => {
                 let dst = a.take(addr);
                 add_jump(addr, dst);
-                self.show_addr_helper(project, dst, true, ui)
+                self.show_addr_helper(dst, true, ui)
             }
             InstructionArgument::RelativeLabel(a) => {
                 let dst = a.take(addr);
                 add_jump(addr, dst);
-                self.show_addr_helper(project, dst, true, ui)
+                self.show_addr_helper(dst, true, ui)
             }
             InstructionArgument::AbsoluteLabel(a) => {
                 let dst = a.take(addr);
                 add_jump(addr, dst);
-                self.show_addr_helper(project, dst, true, ui)
+                self.show_addr_helper(dst, true, ui)
             }
             InstructionArgument::LongLabel(a) => {
                 add_jump(addr, a);
-                self.show_addr_helper(project, a, true, ui)
+                self.show_addr_helper(a, true, ui)
             }
             InstructionArgument::IndirectLabel(a) => todo!(),
             InstructionArgument::IndirectIndexedLabel(a) => todo!(),
@@ -717,7 +704,7 @@ impl DisassemblyView {
                 if let Some(dst) = dst.get() {
                     add_jump(addr, dst);
                 }
-                self.show_addr_helper(project, dst, true, ui)
+                self.show_addr_helper(dst, true, ui)
             }
             InstructionArgument::Flags(a) => self.show_flags_helper(a.0, ui),
             // TODO: helpers for move instructions (are there actually any needed?)
@@ -822,14 +809,13 @@ impl DisassemblyView {
 
     fn show_sidepanel_call_stack<'a>(
         &mut self,
-        project: &'a Project,
+        analyzer: &'a Analyzer,
         ui: &mut egui::Ui,
     ) -> Option<(Addr, &'a AnnotatedInstruction)> {
         let addr = self.selected_addr?;
         if self.selected_callstack.is_none() {
             self.selected_callstack = Some(
-                project
-                    .analyzer
+                analyzer
                     .get_annotation_with_shortest_callstack(addr)?
                     .0
                     .clone(),
@@ -847,8 +833,7 @@ impl DisassemblyView {
         egui::ComboBox::from_label("Call Stack")
             .selected_text(call_stack_to_text(selected))
             .show_ui(ui, |ui| {
-                for item in project
-                    .analyzer
+                for item in analyzer
                     .code_annotations
                     .get(&addr)
                     .map(|a| a.keys())
@@ -861,15 +846,12 @@ impl DisassemblyView {
         if selected != call_stack {
             *call_stack = selected.clone();
         }
-        project
-            .analyzer
-            .get_annotation(addr, call_stack)
-            .map(|a| (addr, a))
+        analyzer.get_annotation(addr, call_stack).map(|a| (addr, a))
     }
 
-    fn show_sidepanel(&mut self, project: &Project, ui: &mut egui::Ui) {
+    fn show_sidepanel(&mut self, cart: &OriginalCart, analyzer: &Analyzer, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
-            if let Some((_addr, annotation)) = self.show_sidepanel_call_stack(project, ui) {
+            if let Some((_addr, annotation)) = self.show_sidepanel_call_stack(analyzer, ui) {
                 ui.separator();
                 let ctx = &annotation.pre;
                 ui.group(|ui| {
@@ -924,8 +906,7 @@ impl DisassemblyView {
                                     ui,
                                     |ui| {
                                         for (a, v) in ctx.map.iter() {
-                                            let Some(addr) = project.smw.cart.reverse_map(*a)
-                                            else {
+                                            let Some(addr) = cart.cart.reverse_map(*a) else {
                                                 continue;
                                             };
                                             ui.label(
@@ -953,7 +934,18 @@ impl DisassemblyView {
 
 impl crate::app::App {
     pub fn show_disassembly(&mut self, ctx: &egui::Context) {
-        if let Some(project) = &self.project.project {
+        if let Some(desc) = self.project.get_description() {
+            egui::TopBottomPanel::bottom("thread-info-panel")
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.small(desc);
+                    });
+                });
+            ctx.output_mut(|out| out.cursor_icon = egui::CursorIcon::Progress);
+        }
+        if let (Some(cart), Some(analyzer)) = (&self.project.cart, &self.project.analyzer) {
             egui::SidePanel::right("disassembly-sidepanel")
                 .resizable(true)
                 .width_range(..)
@@ -961,14 +953,15 @@ impl crate::app::App {
                 .show_animated(ctx, self.disassembly_view.selected_addr.is_some(), |ui| {
                     ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
-                            self.disassembly_view.show_sidepanel(project, ui);
+                            self.disassembly_view.show_sidepanel(cart, analyzer, ui);
                         });
                     });
                 });
         }
         egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(project) = &self.project.project {
-                self.disassembly_view.show_grid(project, ui);
+            if let Some(cart) = &self.project.cart {
+                self.disassembly_view
+                    .show_grid(&cart.cart, self.project.analyzer.as_ref(), ui);
             } else {
                 ui.centered_and_justified(|ui| ui.strong("no cartridge loaded yet"));
             }
