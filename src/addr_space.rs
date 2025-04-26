@@ -1,4 +1,4 @@
-use crate::{addr::Addr, cart::Cart};
+use crate::addr::Addr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SystemMemoryLocation {

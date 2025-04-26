@@ -13,15 +13,9 @@ use crate::{
     vecmap::VecMap,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Stack {
     pub items: Vec<TU8>,
-}
-
-impl Default for Stack {
-    fn default() -> Self {
-        Self { items: vec![] }
-    }
 }
 
 impl Stack {
@@ -468,6 +462,11 @@ impl CallStack {
         self.items.len()
     }
 
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn items(&self) -> &[CallStackItem] {
         &self.items
     }
@@ -656,11 +655,9 @@ impl Analyzer {
             .filter_map(|(addr, table)| {
                 let off = table.first_free_offset(cart, *addr)?;
                 let dst = table.offset_to_addr(cart, off, *addr)?;
-                if cart.read_rom(dst).is_none() {
-                    // TODO: if we are desperate search even further.
-                    //       e.g. the table at 02:f825 has a null-pointer
-                    return None;
-                }
+                // TODO: if we are desperate search even further.
+                //       e.g. the table at 02:f825 has a null-pointer
+                cart.read_rom(dst)?;
                 Some((table, *addr, off, dst))
             })
             // table heuristics
@@ -978,7 +975,7 @@ impl Analyzer {
 
         let pc = head.ctx.pc;
         match self.analyze_head(cart, head.clone()) {
-            Ok(instruction) => {
+            Some(instruction) => {
                 let annotation = AnnotatedInstruction {
                     instruction,
                     pre: head.ctx,
@@ -988,7 +985,7 @@ impl Analyzer {
                     .or_default()
                     .insert(head.call_stack, annotation);
             }
-            Err(_err) => {
+            None => {
                 // TODO: rehandle
             }
         }
@@ -1433,23 +1430,21 @@ impl Analyzer {
         }
     }
 
-    pub fn analyze_head(&mut self, cart: &Cart, head: Head) -> Result<Instruction, ()> {
+    pub fn analyze_head(&mut self, cart: &Cart, head: Head) -> Option<Instruction> {
         let Head {
             mut call_stack,
             mut ctx,
         } = head;
         let instr_pc = ctx.pc;
         let (mf, xf) = (ctx.mf(), ctx.xf());
-        let Some(instr) = Instruction::from_fetcher(
+        let instr = Instruction::from_fetcher(
             || {
                 let addr = ctx.pc.add16_repl(1);
                 ctx.read8(cart, addr).and_then(|e| e.get())
             },
             mf.get(),
             xf.get(),
-        ) else {
-            return Err(());
-        };
+        )?;
 
         match xf {
             TBool::True => {
@@ -1469,7 +1464,7 @@ impl Analyzer {
         match &instr {
             Instruction::Brk(_) => todo!(),
             Instruction::OraDxi(dxi) => todo!(),
-            Instruction::Cop(_) => return Ok(instr),
+            Instruction::Cop(_) => return Some(instr),
             Instruction::OraS(s) => todo!(),
             Instruction::TsbD(d) => {
                 let addr = ctx.resolve_d(cart, d);
@@ -1509,7 +1504,7 @@ impl Analyzer {
             }
             Instruction::Bpl(label) => {
                 self.instr_branch(Head { ctx, call_stack }, N, false, label.take(instr_pc));
-                return Ok(instr);
+                return Some(instr);
             }
             Instruction::OraDiy(diy) => {
                 let addr = ctx.resolve_diy(cart, diy);
@@ -1614,7 +1609,7 @@ impl Analyzer {
             }
             Instruction::Bmi(label) => {
                 self.instr_branch(Head { ctx, call_stack }, N, true, label.take(instr_pc));
-                return Ok(instr);
+                return Some(instr);
             }
             Instruction::AndDiy(diy) => {
                 let addr = ctx.resolve_diy(cart, diy);
@@ -1664,7 +1659,7 @@ impl Analyzer {
                 let addr = ctx.resolve_alx(cart, alx);
                 self.instr_and(cart, &mut ctx, addr);
             }
-            Instruction::Rti => return Ok(instr),
+            Instruction::Rti => return Some(instr),
             Instruction::EorDxi(dxi) => todo!(),
             Instruction::Wdm(_) => todo!(),
             Instruction::EorS(s) => todo!(),
@@ -1700,7 +1695,7 @@ impl Analyzer {
             }
             Instruction::Bvc(label) => {
                 self.instr_branch(Head { ctx, call_stack }, V, false, label.take(instr_pc));
-                return Ok(instr);
+                return Some(instr);
             }
             Instruction::EorDiy(diy) => {
                 let addr = ctx.resolve_diy(cart, diy);
@@ -1753,13 +1748,13 @@ impl Analyzer {
                     ctx.pc.addr = new_pc.wrapping_add(1);
                     if self.sync_callstack(&ctx, cs_pc, &mut call_stack) {
                         // synchronization failed, so we are unable to analyze the return
-                        return Ok(instr);
+                        return Some(instr);
                     }
                 } else if let Some(item) = cs_pc {
                     // fall back to our call stack implementation if the system stack got corrupted
                     ctx.pc = item.return_addr();
                 } else {
-                    return Ok(instr);
+                    return Some(instr);
                 }
             }
             Instruction::AdcDxi(dxi) => todo!(),
@@ -1787,7 +1782,7 @@ impl Analyzer {
                 ctx.a.write_sized(ctx.stack.pop_unknown(mf));
                 ctx.set_nzx(ctx.a_sized());
             }
-            Instruction::AdcI(i) => self.instr_adcimm(&mut ctx, i.clone().into(), false),
+            Instruction::AdcI(i) => self.instr_adcimm(&mut ctx, (*i).into(), false),
             Instruction::RorAc => self.instr_rorimm(&mut ctx),
             Instruction::Rtl => {
                 let cs_pc = call_stack.pop();
@@ -1795,13 +1790,13 @@ impl Analyzer {
                     ctx.pc = new_pc.add16(1);
                     if self.sync_callstack(&ctx, cs_pc, &mut call_stack) {
                         // synchronization failed, so we are unable to analyze the return
-                        return Ok(instr);
+                        return Some(instr);
                     }
                 } else if let Some(item) = cs_pc {
                     // fall back to our call stack implementation if the system stack got corrupted
                     ctx.pc = item.return_addr();
                 } else {
-                    return Ok(instr);
+                    return Some(instr);
                 }
             }
             Instruction::Jmpi(_) => todo!(),
@@ -1819,7 +1814,7 @@ impl Analyzer {
             }
             Instruction::Bvs(label) => {
                 self.instr_branch(Head { ctx, call_stack }, V, true, label.take(instr_pc));
-                return Ok(instr);
+                return Some(instr);
             }
             Instruction::AdcDiy(diy) => {
                 let addr = ctx.resolve_diy(cart, diy);
@@ -1925,7 +1920,7 @@ impl Analyzer {
             }
             Instruction::Bcc(label) => {
                 self.instr_branch(Head { ctx, call_stack }, C, false, label.take(instr_pc));
-                return Ok(instr);
+                return Some(instr);
             }
             Instruction::StaDiy(diy) => {
                 let addr = ctx.resolve_diy(cart, diy);
@@ -2059,7 +2054,7 @@ impl Analyzer {
             }
             Instruction::Bcs(label) => {
                 self.instr_branch(Head { ctx, call_stack }, C, true, label.take(instr_pc));
-                return Ok(instr);
+                return Some(instr);
             }
             Instruction::LdaDiy(diy) => {
                 let addr = ctx.resolve_diy(cart, diy);
@@ -2160,7 +2155,7 @@ impl Analyzer {
             }
             Instruction::Bne(label) => {
                 self.instr_branch(Head { ctx, call_stack }, Z, false, label.take(instr_pc));
-                return Ok(instr);
+                return Some(instr);
             }
             Instruction::CmpDiy(diy) => {
                 let addr = ctx.resolve_diy(cart, diy);
@@ -2240,7 +2235,7 @@ impl Analyzer {
                 if let Some(dst) = dst.get() {
                     ctx.pc = dst;
                 } else {
-                    return Ok(instr);
+                    return Some(instr);
                 }
             }
             Instruction::CmpAx(ax) => {
@@ -2279,7 +2274,7 @@ impl Analyzer {
                 self.instr_adc(cart, &mut ctx, addr, true);
             }
             Instruction::Inx => self.instr_incimm(&mut ctx, |c| &mut c.x, xf, true),
-            Instruction::SbcI(i) => self.instr_adcimm(&mut ctx, i.clone().into(), true),
+            Instruction::SbcI(i) => self.instr_adcimm(&mut ctx, (*i).into(), true),
             Instruction::Nop => (),
             Instruction::Xba => {
                 let [lo, hi] = ctx.a.to_bytes();
@@ -2304,7 +2299,7 @@ impl Analyzer {
             }
             Instruction::Beq(label) => {
                 self.instr_branch(Head { ctx, call_stack }, Z, true, label.take(instr_pc));
-                return Ok(instr);
+                return Some(instr);
             }
             Instruction::SbcDiy(diy) => {
                 let addr = ctx.resolve_diy(cart, diy);
@@ -2355,6 +2350,12 @@ impl Analyzer {
         }
 
         self.heads.push(Head { ctx, call_stack });
-        Ok(instr)
+        Some(instr)
+    }
+}
+
+impl Default for Analyzer {
+    fn default() -> Self {
+        Self::new()
     }
 }

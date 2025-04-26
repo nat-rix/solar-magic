@@ -18,6 +18,7 @@ pub struct OriginalCart {
 }
 
 impl OriginalCart {
+    #[allow(clippy::result_large_err)]
     pub fn new(cart: Cart) -> Result<Self, Cart> {
         let header = cart.header();
         if !cart.is_checksum_matching(&header) {

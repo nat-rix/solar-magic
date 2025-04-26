@@ -88,11 +88,11 @@ pub struct JumpList {
 impl JumpList {
     pub fn jump(&mut self, src: Addr, dst: Addr) {
         self.buffer.truncate(self.len);
-        if !self.buffer.last().is_some_and(|v| v == &src) {
+        if self.buffer.last().is_none_or(|v| v != &src) {
             self.buffer.push(src);
             self.len += 1;
         }
-        if !self.buffer.last().is_some_and(|v| v == &dst) {
+        if self.buffer.last().is_none_or(|v| v != &dst) {
             self.buffer.push(dst);
             self.len += 1;
         }
@@ -376,7 +376,7 @@ impl DisassemblyView {
                         .get(&addr)
                         .map(|table_start| (analyzer, table_start))
                 }) {
-                    let table = analyzer.jump_tables.get(&table_start).unwrap();
+                    let table = analyzer.jump_tables.get(table_start).unwrap();
                     let entry_size = table.ty.entry_size();
 
                     row.col(|ui| {
@@ -429,7 +429,7 @@ impl DisassemblyView {
                             } else {
                                 Addr::new(table_start.bank, lohi)
                             };
-                            jumps.entry(entry).or_insert_with(|| vec![]).push(addr);
+                            jumps.entry(entry).or_default().push(addr);
                             self.show_addr_helper(entry, true, ui);
                         });
                     });
@@ -638,7 +638,7 @@ impl DisassemblyView {
         let Some(arg) = arg else {
             return;
         };
-        let mut add_jump = |s, d| jumps.entry(d).or_insert(vec![]).push(s);
+        let mut add_jump = |s, d| jumps.entry(d).or_default().push(s);
         let ctx = &instr.pre;
         match arg {
             InstructionArgument::Signature(_) => (),
@@ -662,7 +662,7 @@ impl DisassemblyView {
             InstructionArgument::Dy(a) => {
                 self.show_addr_helper(ctx.resolve_dy(cart, &a), false, ui)
             }
-            InstructionArgument::Dxi(a) => todo!(),
+            InstructionArgument::Dxi(_a) => todo!(),
             InstructionArgument::Diy(a) => {
                 self.show_addr_helper(ctx.resolve_diy(cart, &a), false, ui)
             }
@@ -675,9 +675,9 @@ impl DisassemblyView {
             InstructionArgument::Dil(a) => {
                 self.show_addr_helper(ctx.resolve_dil(cart, &a), false, ui)
             }
-            InstructionArgument::S(a) => todo!(),
-            InstructionArgument::Siy(a) => todo!(),
-            InstructionArgument::I(a) => (),
+            InstructionArgument::S(_a) => todo!(),
+            InstructionArgument::Siy(_a) => todo!(),
+            InstructionArgument::I(_a) => (),
             InstructionArgument::NearLabel(a) => {
                 let dst = a.take(addr);
                 add_jump(addr, dst);
@@ -697,8 +697,8 @@ impl DisassemblyView {
                 add_jump(addr, a);
                 self.show_addr_helper(a, true, ui)
             }
-            InstructionArgument::IndirectLabel(a) => todo!(),
-            InstructionArgument::IndirectIndexedLabel(a) => todo!(),
+            InstructionArgument::IndirectLabel(_a) => todo!(),
+            InstructionArgument::IndirectIndexedLabel(_a) => todo!(),
             InstructionArgument::IndirectLongLabel(a) => {
                 let dst = ctx.resolve_jmli(cart, &a);
                 if let Some(dst) = dst.get() {
@@ -787,7 +787,7 @@ impl DisassemblyView {
         );
     }
 
-    fn show_reg16(&mut self, name: &str, val: TU16, is16: impl Into<TBool>, ui: &mut egui::Ui) {
+    fn show_reg16(&mut self, name: &str, val: TU16, _is16: impl Into<TBool>, ui: &mut egui::Ui) {
         // TODO: faint the upper 8-bit of 16-bit if is16=false
         let [lo, hi] = val.to_bytes();
         self.show_anyreg(

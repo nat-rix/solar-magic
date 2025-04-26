@@ -56,8 +56,12 @@ impl Rom {
         self.data.iter().fold(0, |a, b| a.wrapping_add(*b as u16))
     }
 
-    pub fn len(&self) -> u32 {
+    pub const fn len(&self) -> u32 {
         self.data.len() as _
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -92,8 +96,16 @@ impl Title {
         slice.trim_ascii_end()
     }
 
-    pub fn to_string(&self) -> String {
-        self.unpadded_bytes()
+    pub const fn has_early_exthdr(&self) -> bool {
+        self.0[20] == 0
+    }
+}
+
+impl core::fmt::Display for Title {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        use core::fmt::Write;
+        for c in self
+            .unpadded_bytes()
             .iter()
             .take_while(|&&c| c != 0)
             .map(|c| match c {
@@ -107,11 +119,10 @@ impl Title {
                 // invalid JIS X 0201 characters
                 0xe0..=0xff => char::REPLACEMENT_CHARACTER,
             })
-            .collect()
-    }
-
-    pub const fn has_early_exthdr(&self) -> bool {
-        self.0[20] == 0
+        {
+            f.write_char(c)?;
+        }
+        Ok(())
     }
 }
 
