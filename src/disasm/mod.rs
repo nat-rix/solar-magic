@@ -580,14 +580,14 @@ pub struct Head {
 }
 
 #[derive(Clone)]
-pub struct Analyzer {
+pub struct Disassembler {
     pub code_annotations: BTreeMap<Addr, VecMap<CallStack, AnnotatedInstruction>>,
     pub jump_tables: BTreeMap<Addr, JumpTable>,
     pub jump_table_items: HashMap<Addr, Addr>,
     heads: Vec<Head>,
 }
 
-impl Analyzer {
+impl Disassembler {
     pub fn new() -> Self {
         Self {
             code_annotations: BTreeMap::new(),
@@ -870,10 +870,10 @@ impl Analyzer {
             .map(|(table, table_start, off, ..)| (table, table_start, off))
     }
 
-    pub fn analyze(&mut self, cart: &Cart) {
-        'analyze_loop: loop {
+    pub fn disassemble(&mut self, cart: &Cart) {
+        'disasm_loop: loop {
             while !self.is_done() {
-                self.analyze_step(cart);
+                self.disassemble_step(cart);
             }
             for (dst, taddr) in self
                 .jump_tables
@@ -900,14 +900,14 @@ impl Analyzer {
                         },
                         call_stack,
                     });
-                    // TODO: there can be an infinite loop in case that `analyze_step` fails
+                    // TODO: there can be an infinite loop in case that `disassemble_step` fails
                     //       in the next iteration step
-                    continue 'analyze_loop;
+                    continue 'disasm_loop;
                 }
             }
             if let Some((table, _taddr, off)) = self.find_extendable_jump_table(cart) {
                 table.known_entry_offsets.push(off);
-                continue 'analyze_loop;
+                continue 'disasm_loop;
             }
             break;
         }
@@ -959,7 +959,7 @@ impl Analyzer {
         self.heads.is_empty()
     }
 
-    pub fn analyze_step(&mut self, cart: &Cart) {
+    pub fn disassemble_step(&mut self, cart: &Cart) {
         let Some(mut head) = self.heads.pop() else {
             return;
         };
@@ -974,7 +974,7 @@ impl Analyzer {
         }
 
         let pc = head.ctx.pc;
-        match self.analyze_head(cart, head.clone()) {
+        match self.disassemble_with_head(cart, head.clone()) {
             Some(instruction) => {
                 let annotation = AnnotatedInstruction {
                     instruction,
@@ -1430,7 +1430,7 @@ impl Analyzer {
         }
     }
 
-    pub fn analyze_head(&mut self, cart: &Cart, head: Head) -> Option<Instruction> {
+    pub fn disassemble_with_head(&mut self, cart: &Cart, head: Head) -> Option<Instruction> {
         let Head {
             mut call_stack,
             mut ctx,
@@ -2354,7 +2354,7 @@ impl Analyzer {
     }
 }
 
-impl Default for Analyzer {
+impl Default for Disassembler {
     fn default() -> Self {
         Self::new()
     }

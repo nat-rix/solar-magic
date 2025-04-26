@@ -2,8 +2,8 @@ use eframe::egui;
 use egui::ahash::{HashMap, HashMapExt};
 use solar_magic::{
     addr::Addr,
-    analyzer::{Analyzer, AnnotatedInstruction, CallStack, CallStackRoot, JumpTableType},
     cart::Cart,
+    disasm::{AnnotatedInstruction, CallStack, CallStackRoot, Disassembler, JumpTableType},
     instruction::{InstructionArgument, InstructionNamingConvention, OpCode},
     original_cart::OriginalCart,
     tvl::{TBool, TU8, TU16, TU24},
@@ -169,7 +169,7 @@ impl DisassemblyView {
         }
     }
 
-    fn show_grid(&mut self, cart: &Cart, analyzer: Option<&Analyzer>, ui: &mut egui::Ui) {
+    fn show_grid(&mut self, cart: &Cart, disasm: Option<&Disassembler>, ui: &mut egui::Ui) {
         let rect = ui
             .with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
                 ui.vertical(|ui| {
@@ -213,7 +213,7 @@ impl DisassemblyView {
                         .body(|mut body| {
                             self.show_grid_content(
                                 cart,
-                                analyzer,
+                                disasm,
                                 &mut body,
                                 &mut grid_items,
                                 &mut jumps,
@@ -324,7 +324,7 @@ impl DisassemblyView {
     fn show_grid_content(
         &mut self,
         cart: &Cart,
-        analyzer: Option<&Analyzer>,
+        disasm: Option<&Disassembler>,
         body: &mut egui_extras::TableBody,
         grid_items: &mut HashMap<Addr, f32>,
         jumps: &mut HashMap<Addr, Vec<Addr>>,
@@ -347,8 +347,8 @@ impl DisassemblyView {
                     ui.label(egui::RichText::new(addr.to_string()).monospace().weak());
                 });
 
-                let opt_annotation = analyzer
-                    .and_then(|analyzer| analyzer.get_annotation_with_shortest_callstack(addr));
+                let opt_annotation =
+                    disasm.and_then(|disasm| disasm.get_annotation_with_shortest_callstack(addr));
 
                 if let Some((_call_stack, instr)) = opt_annotation {
                     let opcode = instr.instruction.opcode();
@@ -370,13 +370,13 @@ impl DisassemblyView {
                     });
 
                     addr = addr.add24(instr_size.into());
-                } else if let Some((analyzer, table_start)) = analyzer.and_then(|analyzer| {
-                    analyzer
+                } else if let Some((disasm, table_start)) = disasm.and_then(|disasm| {
+                    disasm
                         .jump_table_items
                         .get(&addr)
-                        .map(|table_start| (analyzer, table_start))
+                        .map(|table_start| (disasm, table_start))
                 }) {
-                    let table = analyzer.jump_tables.get(table_start).unwrap();
+                    let table = disasm.jump_tables.get(table_start).unwrap();
                     let entry_size = table.ty.entry_size();
 
                     row.col(|ui| {
@@ -809,13 +809,13 @@ impl DisassemblyView {
 
     fn show_sidepanel_call_stack<'a>(
         &mut self,
-        analyzer: &'a Analyzer,
+        disasm: &'a Disassembler,
         ui: &mut egui::Ui,
     ) -> Option<(Addr, &'a AnnotatedInstruction)> {
         let addr = self.selected_addr?;
         if self.selected_callstack.is_none() {
             self.selected_callstack = Some(
-                analyzer
+                disasm
                     .get_annotation_with_shortest_callstack(addr)?
                     .0
                     .clone(),
@@ -833,7 +833,7 @@ impl DisassemblyView {
         egui::ComboBox::from_label("Call Stack")
             .selected_text(call_stack_to_text(selected))
             .show_ui(ui, |ui| {
-                for item in analyzer
+                for item in disasm
                     .code_annotations
                     .get(&addr)
                     .map(|a| a.keys())
@@ -846,12 +846,12 @@ impl DisassemblyView {
         if selected != call_stack {
             *call_stack = selected.clone();
         }
-        analyzer.get_annotation(addr, call_stack).map(|a| (addr, a))
+        disasm.get_annotation(addr, call_stack).map(|a| (addr, a))
     }
 
-    fn show_sidepanel(&mut self, cart: &OriginalCart, analyzer: &Analyzer, ui: &mut egui::Ui) {
+    fn show_sidepanel(&mut self, cart: &OriginalCart, disasm: &Disassembler, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
-            if let Some((_addr, annotation)) = self.show_sidepanel_call_stack(analyzer, ui) {
+            if let Some((_addr, annotation)) = self.show_sidepanel_call_stack(disasm, ui) {
                 ui.separator();
                 let ctx = &annotation.pre;
                 ui.group(|ui| {
@@ -948,7 +948,7 @@ impl crate::app::App {
                     });
                 }
             });
-        if let (Some(cart), Some(analyzer)) = (&self.project.cart, &self.project.analyzer) {
+        if let (Some(cart), Some(disasm)) = (&self.project.cart, &self.project.disasm) {
             egui::SidePanel::right("disassembly-sidepanel")
                 .resizable(true)
                 .width_range(..)
@@ -956,7 +956,7 @@ impl crate::app::App {
                 .show_animated(ctx, self.disassembly_view.selected_addr.is_some(), |ui| {
                     ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
-                            self.disassembly_view.show_sidepanel(cart, analyzer, ui);
+                            self.disassembly_view.show_sidepanel(cart, disasm, ui);
                         });
                     });
                 });
@@ -964,7 +964,7 @@ impl crate::app::App {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(cart) = &self.project.cart {
                 self.disassembly_view
-                    .show_grid(&cart.cart, self.project.analyzer.as_ref(), ui);
+                    .show_grid(&cart.cart, self.project.disasm.as_ref(), ui);
             } else {
                 ui.centered_and_justified(|ui| ui.strong("no cartridge loaded yet"));
             }

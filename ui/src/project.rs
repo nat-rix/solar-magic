@@ -8,13 +8,13 @@ use std::{
     thread::JoinHandle,
 };
 
-use solar_magic::{analyzer::Analyzer, cart::Cart, original_cart::OriginalCart};
+use solar_magic::{cart::Cart, disasm::Disassembler, original_cart::OriginalCart};
 
 #[derive(Clone)]
 enum LoaderMsg {
     FileOpen(Option<PathBuf>),
     NewCart(Arc<OriginalCart>),
-    NewAnalyzer(Analyzer),
+    NewDisasm(Disassembler),
     IoError(Arc<std::io::Error>),
 }
 
@@ -29,7 +29,7 @@ pub struct AppProject {
     threads: Vec<LoaderThread>,
     is_picker_open: bool,
     pub cart: Option<Arc<OriginalCart>>,
-    pub analyzer: Option<Analyzer>,
+    pub disasm: Option<Disassembler>,
 }
 
 impl AppProject {
@@ -41,7 +41,7 @@ impl AppProject {
             threads: vec![],
             is_picker_open: false,
             cart: None,
-            analyzer: None,
+            disasm: None,
         }
     }
 
@@ -89,11 +89,11 @@ impl AppProject {
                     }
                 }
                 LoaderMsg::NewCart(cart) => {
-                    self.start_analyzer(ctx, cart.clone());
+                    self.start_disasm(ctx, cart.clone());
                     self.cart = Some(cart);
                 }
-                LoaderMsg::NewAnalyzer(analyzer) => {
-                    self.analyzer = Some(analyzer);
+                LoaderMsg::NewDisasm(disasm) => {
+                    self.disasm = Some(disasm);
                 }
                 LoaderMsg::IoError(err) => on_err(&err),
             }
@@ -123,13 +123,13 @@ impl AppProject {
         });
     }
 
-    pub fn start_analyzer(&mut self, ctx: &egui::Context, cart: Arc<OriginalCart>) {
+    pub fn start_disasm(&mut self, ctx: &egui::Context, cart: Arc<OriginalCart>) {
         self.spawn_thread(Some(ctx), move |sender, desc| {
-            *desc.lock() = Some("Analyze cartridge binary".to_string());
-            let mut analyzer = solar_magic::analyzer::Analyzer::new();
-            analyzer.add_vectors(&cart.cart);
-            analyzer.analyze(&cart.cart);
-            let _err = sender.send(LoaderMsg::NewAnalyzer(analyzer));
+            *desc.lock() = Some("Disassemble cartridge binary".to_string());
+            let mut disasm = solar_magic::disasm::Disassembler::new();
+            disasm.add_vectors(&cart.cart);
+            disasm.disassemble(&cart.cart);
+            let _err = sender.send(LoaderMsg::NewDisasm(disasm));
         });
     }
 
