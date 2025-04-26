@@ -934,17 +934,20 @@ impl DisassemblyView {
 
 impl crate::app::App {
     pub fn show_disassembly(&mut self, ctx: &egui::Context) {
-        if let Some(desc) = self.project.get_description() {
-            egui::TopBottomPanel::bottom("thread-info-panel")
-                .resizable(false)
-                .show(ctx, |ui| {
+        let desc = self.project.get_description();
+        if desc.is_some() {
+            ctx.output_mut(|out| out.cursor_icon = egui::CursorIcon::Progress);
+        }
+        egui::TopBottomPanel::bottom("thread-info-panel")
+            .resizable(false)
+            .show_animated(ctx, desc.is_some(), |ui| {
+                if let Some(desc) = desc {
                     ui.horizontal(|ui| {
                         ui.spinner();
                         ui.small(desc);
                     });
-                });
-            ctx.output_mut(|out| out.cursor_icon = egui::CursorIcon::Progress);
-        }
+                }
+            });
         if let (Some(cart), Some(analyzer)) = (&self.project.cart, &self.project.analyzer) {
             egui::SidePanel::right("disassembly-sidepanel")
                 .resizable(true)
