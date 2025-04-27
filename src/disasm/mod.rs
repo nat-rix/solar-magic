@@ -584,6 +584,8 @@ pub struct Disassembler {
     pub code_annotations: BTreeMap<Addr, VecMap<CallStack, AnnotatedInstruction>>,
     pub jump_tables: BTreeMap<Addr, JumpTable>,
     pub jump_table_items: HashMap<Addr, Addr>,
+    pub vectors: Vec<u16>,
+    pub unified_code_annotations: BTreeMap<Addr, AnnotatedInstruction>,
     heads: Vec<Head>,
 }
 
@@ -593,6 +595,8 @@ impl Disassembler {
             code_annotations: BTreeMap::new(),
             jump_tables: BTreeMap::new(),
             jump_table_items: HashMap::new(),
+            unified_code_annotations: BTreeMap::new(),
+            vectors: vec![],
             heads: vec![],
         }
     }
@@ -642,6 +646,9 @@ impl Disassembler {
                 continue;
             }
             let vec = 0xffe0 | (i << 1);
+            if !self.vectors.contains(&vec) {
+                self.vectors.push(vec);
+            }
             self.add_vector(cart, vec);
         }
     }
@@ -919,6 +926,19 @@ impl Disassembler {
                     .known_entry_offsets
                     .iter()
                     .map(|off| (table_start.add16(*off), *table_start))
+            })
+            .collect();
+        self.unified_code_annotations = self
+            .code_annotations
+            .iter()
+            .filter_map(|(addr, map)| {
+                let mut iter = map.iter();
+                let (_, first) = iter.next()?;
+                let mut first = first.clone();
+                for (_, rhs) in iter {
+                    first.pre.unify(&rhs.pre);
+                }
+                Some((*addr, first))
             })
             .collect();
 

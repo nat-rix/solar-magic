@@ -91,6 +91,12 @@ use am::*;
 #[derive(Debug, Clone, Copy)]
 pub struct FlagSet(pub u8);
 
+impl FlagSet {
+    pub const fn is_empty(&self) -> bool {
+        self.0 == 0
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct NearLabel(pub u8);
 

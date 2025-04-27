@@ -12,16 +12,20 @@ pub enum SystemMemoryLocation {
     Other(u16),
 }
 
+pub const fn get_system_area_location(addr: u16) -> SystemMemoryLocation {
+    match addr.to_le_bytes()[1] {
+        0x00..=0x1f => SystemMemoryLocation::Wram(addr as u32),
+        0x21 => SystemMemoryLocation::IoBbus(addr as u8),
+        0x40..=0x5f => SystemMemoryLocation::Io(addr),
+        _ => SystemMemoryLocation::Other(addr),
+    }
+}
+
 pub fn get_system_memory_location(addr: Addr) -> Option<SystemMemoryLocation> {
     let ptr = addr.to_u32();
     Some(if ptr & 0x40_8000 == 0 {
         // system area
-        match addr.addr.to_le_bytes()[1] {
-            0x00..=0x1f => SystemMemoryLocation::Wram(addr.addr as u32),
-            0x21 => SystemMemoryLocation::IoBbus(addr.addr as u8),
-            0x40..=0x5f => SystemMemoryLocation::Io(addr.addr),
-            _ => SystemMemoryLocation::Other(addr.addr),
-        }
+        get_system_area_location(addr.addr)
     } else if addr.bank & 0xfe == 0x7e {
         // wram area
         SystemMemoryLocation::Wram(ptr & 0x1_ffff)

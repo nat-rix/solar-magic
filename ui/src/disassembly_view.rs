@@ -964,7 +964,7 @@ impl crate::app::App {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(cart) = &self.project.cart {
                 self.disassembly_view
-                    .show_grid(&cart.cart, self.project.disasm.as_ref(), ui);
+                    .show_grid(&cart.cart, self.project.disasm.as_deref(), ui);
             } else {
                 ui.centered_and_justified(|ui| ui.strong("no cartridge loaded yet"));
             }

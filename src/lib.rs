@@ -5,6 +5,7 @@ mod crc32;
 pub mod disasm;
 pub mod instruction;
 pub mod original_cart;
+pub mod rewriter;
 pub mod tvl;
 mod vecmap;
 

@@ -8,13 +8,16 @@ use std::{
     thread::JoinHandle,
 };
 
-use solar_magic::{cart::Cart, disasm::Disassembler, original_cart::OriginalCart};
+use solar_magic::{
+    cart::Cart, disasm::Disassembler, original_cart::OriginalCart, rewriter::Rewriter,
+};
 
 #[derive(Clone)]
 enum LoaderMsg {
     FileOpen(Option<PathBuf>),
     NewCart(Arc<OriginalCart>),
-    NewDisasm(Disassembler),
+    NewDisasm(Arc<Disassembler>),
+    NewRewrite(Arc<Rewriter>),
     IoError(Arc<std::io::Error>),
 }
 
@@ -29,7 +32,8 @@ pub struct AppProject {
     threads: Vec<LoaderThread>,
     is_picker_open: bool,
     pub cart: Option<Arc<OriginalCart>>,
-    pub disasm: Option<Disassembler>,
+    pub disasm: Option<Arc<Disassembler>>,
+    pub rewriter: Option<Arc<Rewriter>>,
 }
 
 impl AppProject {
@@ -42,6 +46,7 @@ impl AppProject {
             is_picker_open: false,
             cart: None,
             disasm: None,
+            rewriter: None,
         }
     }
 
@@ -94,6 +99,10 @@ impl AppProject {
                 }
                 LoaderMsg::NewDisasm(disasm) => {
                     self.disasm = Some(disasm);
+                    self.start_rewrite(ctx);
+                }
+                LoaderMsg::NewRewrite(rewriter) => {
+                    self.rewriter = Some(rewriter);
                 }
                 LoaderMsg::IoError(err) => on_err(&err),
             }
@@ -129,7 +138,21 @@ impl AppProject {
             let mut disasm = solar_magic::disasm::Disassembler::new();
             disasm.add_vectors(&cart.cart);
             disasm.disassemble(&cart.cart);
-            let _err = sender.send(LoaderMsg::NewDisasm(disasm));
+            let _err = sender.send(LoaderMsg::NewDisasm(Arc::new(disasm)));
+        });
+    }
+
+    pub fn start_rewrite(&mut self, ctx: &egui::Context) {
+        let (Some(cart), Some(disasm)) =
+            (self.cart.as_ref().cloned(), self.disasm.as_ref().cloned())
+        else {
+            return;
+        };
+        self.spawn_thread(Some(ctx), move |sender, desc| {
+            *desc.lock() = Some("Static rewrite cartridge disassembly".to_string());
+            let mut rewriter = solar_magic::rewriter::Rewriter::new();
+            rewriter.rewrite(&cart.cart, &disasm);
+            let _err = sender.send(LoaderMsg::NewRewrite(Arc::new(rewriter)));
         });
     }
 
