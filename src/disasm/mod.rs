@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::{
+    VecMap,
     addr::Addr,
     addr_space::{CartMemoryLocation, MemoryLocation, SystemMemoryLocation},
     cart::Cart,
@@ -10,7 +11,6 @@ use crate::{
     },
     pf::*,
     tvl::{TBool, TU8, TU16, TU24, TUnknown},
-    vecmap::VecMap,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

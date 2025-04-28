@@ -408,6 +408,13 @@ impl Cart {
         }
     }
 
+    pub fn map_rom(&self, addr: Addr) -> Option<u32> {
+        match self.map_full(addr) {
+            MemoryLocation::Cart(CartMemoryLocation::Rom(off)) => Some(off),
+            _ => None,
+        }
+    }
+
     pub fn map_full(&self, addr: Addr) -> MemoryLocation {
         if let Some(loc) = crate::addr_space::get_system_memory_location(addr) {
             MemoryLocation::System(loc)

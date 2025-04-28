@@ -1,28 +1,22 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::{
     addr::Addr,
     addr_space::MemoryLocation,
     cart::Cart,
     disasm::{AnnotatedInstruction, Context, Disassembler},
-    instruction::{Instruction, NearLabel, am},
+    instruction::{Instruction, InstructionArgument, NearLabel, am},
     pf,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BlockId {
-    original_addr: Addr,
+    start_rom_offset: u32,
 }
 
-impl core::cmp::PartialOrd for BlockId {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl core::cmp::Ord for BlockId {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.original_addr.cmp(&other.original_addr)
+impl BlockId {
+    const fn from_off(start_rom_offset: u32) -> Self {
+        Self { start_rom_offset }
     }
 }
 
@@ -270,15 +264,30 @@ pub enum BranchCondition {
 }
 
 #[derive(Debug, Clone)]
+pub enum AbstractCodeLabel {
+    Rom(BlockId),
+    Addr(Addr),
+}
+
+impl AbstractCodeLabel {
+    pub fn from_addr(cart: &Cart, addr: Addr) -> Self {
+        cart.map_rom(addr)
+            .map(BlockId::from_off)
+            .map(Self::Rom)
+            .unwrap_or(Self::Addr(addr))
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct AbstractBranch {
     pub cond: BranchCondition,
-    pub label: BlockId,
+    pub label: AbstractCodeLabel,
 }
 
 #[derive(Debug, Clone)]
 pub struct AbstractCall {
     pub is_long: bool,
-    pub label: BlockId,
+    pub label: AbstractCodeLabel,
 }
 
 #[derive(Debug, Clone)]
@@ -361,13 +370,9 @@ impl AbstractInstruction {
         }))
     }
 
-    pub fn new_bra(ctx: &Context, cond: BranchCondition, label: NearLabel) -> Self {
-        Self::Branch(AbstractBranch {
-            cond,
-            label: BlockId {
-                original_addr: label.take(ctx.pc),
-            },
-        })
+    pub fn new_bra(cart: &Cart, ctx: &Context, cond: BranchCondition, label: NearLabel) -> Self {
+        let label = AbstractCodeLabel::from_addr(cart, label.take(ctx.pc));
+        Self::Branch(AbstractBranch { cond, label })
     }
 }
 
@@ -385,8 +390,7 @@ pub enum BlockContent {
 #[derive(Debug, Clone)]
 pub struct Block {
     pub content: BlockContent,
-    pub start: u32,
-    pub end: u32,
+    pub size: u32,
 }
 
 impl Block {
@@ -395,78 +399,96 @@ impl Block {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct BlockMap {
+    starts: BTreeSet<u32>,
+}
+
+impl BlockMap {
+    pub fn get(&self, val: u32) -> Option<u32> {
+        self.starts.range(..=val).last().copied()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Rewriter {
-    // TODO: compare performance between `VecMap` and `BTreeMap`
-    blocks: BTreeMap<BlockId, Block>,
-    last_block_id: Option<BlockId>,
-    cursor: u32,
+    blocks: HashMap<BlockId, Block>,
+    block_starts: BlockMap,
 }
 
 impl Rewriter {
     pub fn new() -> Self {
         Self {
             blocks: Default::default(),
-            last_block_id: None,
-            cursor: 0,
+            block_starts: Default::default(),
         }
+    }
+
+    fn init_code_block_starts(&mut self, cart: &Cart, disasm: &Disassembler) {
+        let iter0 = disasm.vectors.iter().map(|vec| Addr::new(0, *vec));
+        let iter1 = disasm
+            .unified_code_annotations
+            .iter()
+            .filter_map(|(addr, ann)| {
+                Some(match &ann.instruction.arg() {
+                    Some(InstructionArgument::NearLabel(label)) => label.take(*addr),
+                    Some(InstructionArgument::RelativeLabel(label)) => label.take(*addr),
+                    Some(InstructionArgument::AbsoluteLabel(label)) => label.take(*addr),
+                    Some(InstructionArgument::LongLabel(label)) => *label,
+                    _ => return None,
+                })
+            });
+        let iter2 = disasm
+            .jump_tables
+            .iter()
+            .flat_map(|(table_start, table)| {
+                table
+                    .known_entry_offsets
+                    .iter()
+                    .map(move |off| (table_start, table, *off))
+            })
+            .filter_map(|(table_start, table, table_off)| {
+                table.offset_to_addr(cart, table_off, *table_start)
+            });
+
+        self.block_starts.starts = iter0
+            .chain(iter1)
+            .chain(iter2)
+            .filter_map(|addr| cart.map_rom(addr))
+            .collect();
     }
 
     pub fn rewrite(&mut self, cart: &Cart, disasm: &Disassembler) {
-        while self.cursor < cart.rom.len() {
-            self.rewrite_step(cart, disasm);
-        }
-    }
-
-    fn rewrite_step(&mut self, cart: &Cart, disasm: &Disassembler) {
-        let Some(addr) = cart.reverse_map_rom(self.cursor) else {
-            self.cursor = self.cursor.wrapping_add(1);
-            return;
-        };
-        let block_id = self.last_block_id.as_ref().cloned().unwrap_or(BlockId {
-            original_addr: addr,
-        });
-        if let Some(ann) = disasm.unified_code_annotations.get(&addr) {
-            if self.rewrite_instr(cart, ann, block_id).is_none() {
+        self.init_code_block_starts(cart, disasm);
+        for (addr, ann) in disasm.unified_code_annotations.iter() {
+            let Some(off) = cart.map_rom(*addr) else {
+                continue;
+            };
+            let Some(block_start) = self.block_starts.get(off) else {
+                continue;
+            };
+            let block_id = BlockId {
+                start_rom_offset: block_start,
+            };
+            let block = self.blocks.entry(block_id).or_insert_with(|| Block {
+                content: BlockContent::Code(CodeBlock { instrs: vec![] }),
+                size: 0,
+            });
+            if Self::rewrite_instr(cart, ann, block).is_none() {
                 todo!()
             }
         }
     }
 
-    fn rewrite_instr(
-        &mut self,
-        cart: &Cart,
-        ann: &AnnotatedInstruction,
-        block_id: BlockId,
-    ) -> Option<()> {
-        let block_entry = self.blocks.entry(block_id.clone());
-        let block = match block_entry {
-            std::collections::btree_map::Entry::Occupied(entry) if entry.get().is_code() => {
-                entry.into_mut()
-            }
-            entry => {
-                let block = Block {
-                    content: BlockContent::Code(CodeBlock { instrs: vec![] }),
-                    start: self.cursor,
-                    end: self.cursor,
-                };
-                match entry {
-                    std::collections::btree_map::Entry::Vacant(entry) => entry.insert(block),
-                    std::collections::btree_map::Entry::Occupied(mut entry) => {
-                        entry.insert(block);
-                        entry.into_mut()
-                    }
-                }
-            }
-        };
+    fn rewrite_instr(cart: &Cart, ann: &AnnotatedInstruction, block: &mut Block) -> Option<()> {
+        let ctx = &ann.pre;
         let Block {
             content: BlockContent::Code(block),
-            ..
+            size,
         } = block
         else {
-            unreachable!()
+            todo!()
         };
-        let ctx = &ann.pre;
         let mut push = |v| block.instrs.push(v);
         match ann.instruction {
             Instruction::Brk(_) => todo!(),
@@ -486,6 +508,7 @@ impl Rewriter {
             Instruction::AslA(_a) => todo!(),
             Instruction::OraAl(_al) => todo!(),
             Instruction::Bpl(label) => push(AbstractInstruction::new_bra(
+                cart,
                 ctx,
                 BranchCondition::Pl,
                 label,
@@ -520,16 +543,12 @@ impl Rewriter {
             Instruction::OraAlx(_alx) => todo!(),
             Instruction::Jsr(label) => push(AbstractInstruction::Call(AbstractCall {
                 is_long: false,
-                label: BlockId {
-                    original_addr: label.take(ctx.pc),
-                },
+                label: AbstractCodeLabel::from_addr(cart, label.take(ctx.pc)),
             })),
             Instruction::AndDxi(_dxi) => todo!(),
             Instruction::Jsl(label) => push(AbstractInstruction::Call(AbstractCall {
                 is_long: true,
-                label: BlockId {
-                    original_addr: label,
-                },
+                label: AbstractCodeLabel::from_addr(cart, label),
             })),
             Instruction::AndS(_s) => todo!(),
             Instruction::BitD(_d) => todo!(),
@@ -545,6 +564,7 @@ impl Rewriter {
             Instruction::RolA(_a) => todo!(),
             Instruction::AndAl(_al) => todo!(),
             Instruction::Bmi(label) => push(AbstractInstruction::new_bra(
+                cart,
                 ctx,
                 BranchCondition::Mi,
                 label,
@@ -589,6 +609,7 @@ impl Rewriter {
             Instruction::LsrA(_a) => todo!(),
             Instruction::EorAl(_al) => todo!(),
             Instruction::Bvc(label) => push(AbstractInstruction::new_bra(
+                cart,
                 ctx,
                 BranchCondition::Vc,
                 label,
@@ -637,6 +658,7 @@ impl Rewriter {
             Instruction::RorA(_a) => todo!(),
             Instruction::AdcAl(_al) => todo!(),
             Instruction::Bvs(label) => push(AbstractInstruction::new_bra(
+                cart,
                 ctx,
                 BranchCondition::Vs,
                 label,
@@ -693,6 +715,7 @@ impl Rewriter {
                 push(AbstractInstruction::new_sta(ctx, dst)?);
             }
             Instruction::Bcc(label) => push(AbstractInstruction::new_bra(
+                cart,
                 ctx,
                 BranchCondition::Cc,
                 label,
@@ -795,6 +818,7 @@ impl Rewriter {
                 AbstractAccess::new_absl(cart, al),
             )?),
             Instruction::Bcs(label) => push(AbstractInstruction::new_bra(
+                cart,
                 ctx,
                 BranchCondition::Cs,
                 label,
@@ -861,6 +885,7 @@ impl Rewriter {
             Instruction::DecA(_a) => todo!(),
             Instruction::CmpAl(_al) => todo!(),
             Instruction::Bne(label) => push(AbstractInstruction::new_bra(
+                cart,
                 ctx,
                 BranchCondition::Ne,
                 label,
@@ -917,6 +942,7 @@ impl Rewriter {
             Instruction::IncA(_a) => todo!(),
             Instruction::SbcAl(_al) => todo!(),
             Instruction::Beq(label) => push(AbstractInstruction::new_bra(
+                cart,
                 ctx,
                 BranchCondition::Eq,
                 label,
@@ -940,7 +966,7 @@ impl Rewriter {
             Instruction::SbcAlx(_alx) => todo!(),
         }
         println!("{:x?}", block.instrs.last());
-        self.cursor = self.cursor.wrapping_add(u32::from(ann.instruction.size()));
+        *size = size.wrapping_add(u32::from(ann.instruction.size()));
         Some(())
     }
 }

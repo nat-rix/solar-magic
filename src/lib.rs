@@ -2,12 +2,14 @@ pub mod addr;
 pub mod addr_space;
 pub mod cart;
 mod crc32;
+mod datatypes;
 pub mod disasm;
 pub mod instruction;
 pub mod original_cart;
 pub mod rewriter;
 pub mod tvl;
-mod vecmap;
+
+pub(crate) use datatypes::vecmap::VecMap;
 
 pub mod pf {
     pub const C: u8 = 1 << 0;
