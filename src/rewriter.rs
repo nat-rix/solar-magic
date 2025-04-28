@@ -7,7 +7,6 @@ use crate::{
     disasm::{AnnotatedInstruction, Context, Disassembler},
     instruction::{Instruction, NearLabel, am},
     pf,
-    tvl::TBool,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,13 +92,37 @@ impl AbstractAccess {
         slf.index = Some(IndexRegister::X);
         slf
     }
+
+    pub fn new_dir(cart: &Cart, ctx: &Context, d: am::D) -> Self {
+        let addr = ctx.d.get().unwrap_or(0).wrapping_add(d.0 as _);
+        let loc = cart.map_full(Addr::new(0, addr));
+        Self {
+            addr: AbstractAddress::Location(loc),
+            index: None,
+            is_long_wrapping: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct AbstractStoreInstruction {
     pub src: StoreableRegister,
     pub dst: AbstractAccess,
-    pub is8: TBool,
+    pub is8: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadableRegister {
+    A,
+    X,
+    Y,
+}
+
+#[derive(Debug, Clone)]
+pub struct AbstractLoadInstruction {
+    pub src: AbstractAccess,
+    pub dst: LoadableRegister,
+    pub is8: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,6 +205,12 @@ pub enum ModifyLocation {
     Access(AbstractAccess),
 }
 
+impl From<AbstractAccess> for ModifyLocation {
+    fn from(value: AbstractAccess) -> Self {
+        Self::Access(value)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AbstractModify {
     pub op: ModifyOperation,
@@ -247,17 +276,25 @@ pub struct AbstractBranch {
 }
 
 #[derive(Debug, Clone)]
+pub struct AbstractCall {
+    pub is_long: bool,
+    pub label: BlockId,
+}
+
+#[derive(Debug, Clone)]
 pub enum AbstractInstruction {
     SetFlags(u8),
     ClrFlags(u8),
     /// Store a value into address space.
     /// This does not affect flags.
     Store(AbstractStoreInstruction),
+    Load(AbstractLoadInstruction),
     Transfer8(AbstractTransfer8),
     Transfer16(AbstractTransfer16),
     Modify(AbstractModify),
     OperateA(AbstractOperate),
     Branch(AbstractBranch),
+    Call(AbstractCall),
     Xce,
 }
 
@@ -274,20 +311,28 @@ impl From<AbstractTransfer16> for AbstractInstruction {
 }
 
 impl AbstractInstruction {
-    pub fn new_stz(ctx: &Context, dst: AbstractAccess) -> Self {
-        Self::Store(AbstractStoreInstruction {
+    pub fn new_stz(ctx: &Context, dst: AbstractAccess) -> Option<Self> {
+        Some(Self::Store(AbstractStoreInstruction {
             src: StoreableRegister::Zero,
             dst,
-            is8: ctx.mf(),
-        })
+            is8: ctx.mf().get()?,
+        }))
     }
 
-    pub fn new_sta(ctx: &Context, dst: AbstractAccess) -> Self {
-        Self::Store(AbstractStoreInstruction {
+    pub fn new_sta(ctx: &Context, dst: AbstractAccess) -> Option<Self> {
+        Some(Self::Store(AbstractStoreInstruction {
             src: StoreableRegister::A,
             dst,
-            is8: ctx.mf(),
-        })
+            is8: ctx.mf().get()?,
+        }))
+    }
+
+    pub fn new_lda(ctx: &Context, src: AbstractAccess) -> Option<Self> {
+        Some(Self::Load(AbstractLoadInstruction {
+            src,
+            dst: LoadableRegister::A,
+            is8: ctx.mf().get()?,
+        }))
     }
 
     pub fn new_ldimm(i: am::I, t8: TransferDst8, t16: TransferDst16) -> Self {
@@ -302,6 +347,18 @@ impl AbstractInstruction {
             op,
             rhs: rhs.into(),
         })
+    }
+
+    pub fn new_mod(
+        ctx: &Context,
+        op: ModifyOperation,
+        loc: impl Into<ModifyLocation>,
+    ) -> Option<Self> {
+        Some(Self::Modify(AbstractModify {
+            op,
+            loc: loc.into(),
+            is_long: !ctx.mf().get()?,
+        }))
     }
 
     pub fn new_bra(ctx: &Context, cond: BranchCondition, label: NearLabel) -> Self {
@@ -461,9 +518,19 @@ impl Rewriter {
             Instruction::OraAx(_ax) => todo!(),
             Instruction::AslAx(_ax) => todo!(),
             Instruction::OraAlx(_alx) => todo!(),
-            Instruction::Jsr(_absolute_label) => todo!(),
+            Instruction::Jsr(label) => push(AbstractInstruction::Call(AbstractCall {
+                is_long: false,
+                label: BlockId {
+                    original_addr: label.take(ctx.pc),
+                },
+            })),
             Instruction::AndDxi(_dxi) => todo!(),
-            Instruction::Jsl(_addr) => todo!(),
+            Instruction::Jsl(label) => push(AbstractInstruction::Call(AbstractCall {
+                is_long: true,
+                label: BlockId {
+                    original_addr: label,
+                },
+            })),
             Instruction::AndS(_s) => todo!(),
             Instruction::BitD(_d) => todo!(),
             Instruction::AndD(_d) => todo!(),
@@ -552,7 +619,10 @@ impl Rewriter {
             Instruction::AdcDxi(_dxi) => todo!(),
             Instruction::Per(_relative_label) => todo!(),
             Instruction::AdcS(_s) => todo!(),
-            Instruction::StzD(_d) => todo!(),
+            Instruction::StzD(d) => {
+                let dst = AbstractAccess::new_dir(cart, ctx, d);
+                push(AbstractInstruction::new_stz(ctx, dst)?);
+            }
             Instruction::AdcD(_d) => todo!(),
             Instruction::RorD(_d) => todo!(),
             Instruction::AdcDil(_dil) => todo!(),
@@ -615,12 +685,12 @@ impl Rewriter {
             Instruction::StyA(_a) => todo!(),
             Instruction::StaA(a) => {
                 let dst = AbstractAccess::new_abs(cart, ctx, a);
-                push(AbstractInstruction::new_sta(ctx, dst));
+                push(AbstractInstruction::new_sta(ctx, dst)?);
             }
             Instruction::StxA(_a) => todo!(),
             Instruction::StaAl(al) => {
                 let dst = AbstractAccess::new_absl(cart, al);
-                push(AbstractInstruction::new_sta(ctx, dst));
+                push(AbstractInstruction::new_sta(ctx, dst)?);
             }
             Instruction::Bcc(label) => push(AbstractInstruction::new_bra(
                 ctx,
@@ -643,7 +713,7 @@ impl Rewriter {
             }
             Instruction::StaAy(ay) => {
                 let dst = AbstractAccess::new_absy(cart, ctx, ay);
-                push(AbstractInstruction::new_sta(ctx, dst));
+                push(AbstractInstruction::new_sta(ctx, dst)?);
             }
             Instruction::Txs => todo!(),
             Instruction::Txy => {
@@ -655,19 +725,19 @@ impl Rewriter {
             }
             Instruction::StzA(a) => {
                 let dst = AbstractAccess::new_abs(cart, ctx, a);
-                push(AbstractInstruction::new_stz(ctx, dst));
+                push(AbstractInstruction::new_stz(ctx, dst)?);
             }
             Instruction::StaAx(ax) => {
                 let dst = AbstractAccess::new_absx(cart, ctx, ax);
-                push(AbstractInstruction::new_sta(ctx, dst));
+                push(AbstractInstruction::new_sta(ctx, dst)?);
             }
             Instruction::StzAx(ax) => {
                 let dst = AbstractAccess::new_absx(cart, ctx, ax);
-                push(AbstractInstruction::new_stz(ctx, dst));
+                push(AbstractInstruction::new_stz(ctx, dst)?);
             }
             Instruction::StaAlx(alx) => {
                 let dst = AbstractAccess::new_abslx(cart, alx);
-                push(AbstractInstruction::new_sta(ctx, dst));
+                push(AbstractInstruction::new_sta(ctx, dst)?);
             }
             Instruction::LdyI(i) => {
                 push(AbstractInstruction::new_ldimm(
@@ -686,7 +756,10 @@ impl Rewriter {
             }
             Instruction::LdaS(_s) => todo!(),
             Instruction::LdyD(_d) => todo!(),
-            Instruction::LdaD(_d) => todo!(),
+            Instruction::LdaD(d) => push(AbstractInstruction::new_lda(
+                ctx,
+                AbstractAccess::new_dir(cart, ctx, d),
+            )?),
             Instruction::LdxD(_d) => todo!(),
             Instruction::LdaDil(_dil) => todo!(),
             Instruction::Tay => {
@@ -712,9 +785,15 @@ impl Rewriter {
             }
             Instruction::Plb => todo!(),
             Instruction::LdyA(_a) => todo!(),
-            Instruction::LdaA(_a) => todo!(),
+            Instruction::LdaA(a) => push(AbstractInstruction::new_lda(
+                ctx,
+                AbstractAccess::new_abs(cart, ctx, a),
+            )?),
             Instruction::LdxA(_a) => todo!(),
-            Instruction::LdaAl(_al) => todo!(),
+            Instruction::LdaAl(al) => push(AbstractInstruction::new_lda(
+                ctx,
+                AbstractAccess::new_absl(cart, al),
+            )?),
             Instruction::Bcs(label) => push(AbstractInstruction::new_bra(
                 ctx,
                 BranchCondition::Cs,
@@ -753,7 +832,13 @@ impl Rewriter {
             Instruction::CmpS(_s) => todo!(),
             Instruction::CpyD(_d) => todo!(),
             Instruction::CmpD(_d) => todo!(),
-            Instruction::DecD(_d) => todo!(),
+            Instruction::DecD(d) => {
+                push(AbstractInstruction::new_mod(
+                    ctx,
+                    ModifyOperation::Dec,
+                    AbstractAccess::new_dir(cart, ctx, d),
+                )?);
+            }
             Instruction::CmpDil(_dil) => todo!(),
             Instruction::Iny => {
                 push(AbstractInstruction::Modify(AbstractModify {
@@ -807,7 +892,13 @@ impl Rewriter {
             Instruction::SbcS(_s) => todo!(),
             Instruction::CpxD(_d) => todo!(),
             Instruction::SbcD(_d) => todo!(),
-            Instruction::IncD(_d) => todo!(),
+            Instruction::IncD(d) => {
+                push(AbstractInstruction::new_mod(
+                    ctx,
+                    ModifyOperation::Inc,
+                    AbstractAccess::new_dir(cart, ctx, d),
+                )?);
+            }
             Instruction::SbcDil(_dil) => todo!(),
             Instruction::Inx => {
                 push(AbstractInstruction::Modify(AbstractModify {
