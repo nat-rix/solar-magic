@@ -34,16 +34,17 @@ pub enum IndexRegister {
     Y,
 }
 
-#[derive(Debug, Clone)]
-pub enum AbstractAddress {
-    Location(MemoryLocation),
+#[derive(Debug, Clone, Copy)]
+pub enum AccessType {
+    Absolute(Option<IndexRegister>),
+    Direct(Option<IndexRegister>),
+    IndirectLongY,
 }
 
 #[derive(Debug, Clone)]
 pub struct AbstractAccess {
-    pub addr: AbstractAddress,
-    pub index: Option<IndexRegister>,
-    pub is_long_wrapping: bool,
+    pub location: MemoryLocation,
+    pub ty: AccessType,
 }
 
 impl AbstractAccess {
@@ -62,38 +63,45 @@ impl AbstractAccess {
     }
 
     pub fn new_absx(cart: &Cart, ctx: &Context, ax: am::Ax) -> Self {
-        let mut slf = Self::new_abs(cart, ctx, am::A(ax.0));
-        slf.index = Some(IndexRegister::X);
-        slf
+        Self {
+            ty: AccessType::Absolute(Some(IndexRegister::X)),
+            ..Self::new_abs(cart, ctx, am::A(ax.0))
+        }
     }
 
     pub fn new_absy(cart: &Cart, ctx: &Context, ay: am::Ay) -> Self {
-        let mut slf = Self::new_abs(cart, ctx, am::A(ay.0));
-        slf.index = Some(IndexRegister::Y);
-        slf
+        Self {
+            ty: AccessType::Absolute(Some(IndexRegister::Y)),
+            ..Self::new_abs(cart, ctx, am::A(ay.0))
+        }
     }
 
     pub fn new_absl(cart: &Cart, al: am::Al) -> Self {
         Self {
-            addr: AbstractAddress::Location(cart.map_full(al.0)),
-            index: None,
-            is_long_wrapping: true,
+            ty: AccessType::Absolute(None),
+            location: cart.map_full(al.0),
         }
     }
 
     pub fn new_abslx(cart: &Cart, alx: am::Alx) -> Self {
-        let mut slf = Self::new_absl(cart, am::Al(alx.0));
-        slf.index = Some(IndexRegister::X);
-        slf
+        Self {
+            ty: AccessType::Absolute(Some(IndexRegister::X)),
+            ..Self::new_absl(cart, am::Al(alx.0))
+        }
     }
 
     pub fn new_dir(cart: &Cart, ctx: &Context, d: am::D) -> Self {
         let addr = ctx.d.get().unwrap_or(0).wrapping_add(d.0 as _);
-        let loc = cart.map_full(Addr::new(0, addr));
         Self {
-            addr: AbstractAddress::Location(loc),
-            index: None,
-            is_long_wrapping: false,
+            ty: AccessType::Direct(None),
+            location: cart.map_full(Addr::new(0, addr)),
+        }
+    }
+
+    pub fn new_indly(cart: &Cart, ctx: &Context, dily: am::Dily) -> Self {
+        Self {
+            ty: AccessType::IndirectLongY,
+            ..Self::new_dir(cart, ctx, am::D(dily.0))
         }
     }
 }
@@ -199,6 +207,12 @@ pub enum ModifyLocation {
     Access(AbstractAccess),
 }
 
+impl ModifyLocation {
+    pub const fn is_index(&self) -> bool {
+        matches!(self, Self::X | Self::Y)
+    }
+}
+
 impl From<AbstractAccess> for ModifyLocation {
     fn from(value: AbstractAccess) -> Self {
         Self::Access(value)
@@ -216,6 +230,9 @@ pub struct AbstractModify {
 pub enum OperateType {
     Adc,
     Sbc,
+    Or,
+    And,
+    Eor,
 }
 
 #[derive(Debug, Clone)]
@@ -236,6 +253,21 @@ pub enum OperateRhs {
     Op16(OperateRhs16),
 }
 
+impl OperateRhs {
+    pub fn from_access(access: AbstractAccess, is_short: bool) -> Self {
+        if is_short {
+            Self::Op8(OperateRhs8::Access(access))
+        } else {
+            Self::Op16(OperateRhs16::Access(access))
+        }
+    }
+
+    pub fn from_access_mf(ctx: &Context, access: AbstractAccess) -> Option<Self> {
+        let is_short = ctx.mf().get()?;
+        Some(Self::from_access(access, is_short))
+    }
+}
+
 impl From<am::I> for OperateRhs {
     fn from(value: am::I) -> Self {
         match value {
@@ -248,6 +280,47 @@ impl From<am::I> for OperateRhs {
 #[derive(Debug, Clone)]
 pub struct AbstractOperate {
     pub op: OperateType,
+    pub rhs: OperateRhs,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CmpLhs {
+    A,
+    X,
+    Y,
+}
+
+impl CmpLhs {
+    pub const fn is_index(&self) -> bool {
+        matches!(self, Self::X | Self::Y)
+    }
+
+    pub fn is_short(&self, ctx: &Context) -> Option<bool> {
+        let flag = if self.is_index() { ctx.xf() } else { ctx.mf() };
+        flag.get()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum CompareType {
+    Cmp(CmpLhs),
+    Bit,
+    Trb,
+    Tsb,
+}
+
+impl CompareType {
+    pub const fn lhs(&self) -> CmpLhs {
+        match self {
+            Self::Cmp(lhs) => *lhs,
+            _ => CmpLhs::A,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AbstractCompare {
+    pub op: CompareType,
     pub rhs: OperateRhs,
 }
 
@@ -280,7 +353,7 @@ impl AbstractCodeLabel {
 
 #[derive(Debug, Clone)]
 pub struct AbstractBranch {
-    pub cond: BranchCondition,
+    pub cond: Option<BranchCondition>,
     pub label: AbstractCodeLabel,
 }
 
@@ -288,6 +361,30 @@ pub struct AbstractBranch {
 pub struct AbstractCall {
     pub is_long: bool,
     pub label: AbstractCodeLabel,
+}
+
+#[derive(Debug, Clone)]
+pub enum AbstractPush {
+    A { long: bool },
+    X { long: bool },
+    Y { long: bool },
+    P,
+    K,
+    B,
+}
+
+#[derive(Debug, Clone)]
+pub enum AbstractPop {
+    A { long: bool },
+    X { long: bool },
+    Y { long: bool },
+    P,
+    B,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AbstractReturn {
+    pub is_long: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -302,9 +399,14 @@ pub enum AbstractInstruction {
     Transfer16(AbstractTransfer16),
     Modify(AbstractModify),
     OperateA(AbstractOperate),
+    Compare(AbstractCompare),
     Branch(AbstractBranch),
     Call(AbstractCall),
+    Push(AbstractPush),
+    Pop(AbstractPop),
     Xce,
+    Xba,
+    Return(AbstractReturn),
 }
 
 impl From<AbstractTransfer8> for AbstractInstruction {
@@ -344,6 +446,14 @@ impl AbstractInstruction {
         }))
     }
 
+    pub fn new_ldy(ctx: &Context, src: AbstractAccess) -> Option<Self> {
+        Some(Self::Load(AbstractLoadInstruction {
+            src,
+            dst: LoadableRegister::Y,
+            is8: ctx.xf().get()?,
+        }))
+    }
+
     pub fn new_ldimm(i: am::I, t8: TransferDst8, t16: TransferDst16) -> Self {
         match i {
             am::I::U8(v) => TransferSrc8::Imm(v).to_instr(t8).into(),
@@ -358,19 +468,34 @@ impl AbstractInstruction {
         })
     }
 
+    pub fn new_op_mf(ctx: &Context, op: OperateType, rhs: AbstractAccess) -> Option<Self> {
+        OperateRhs::from_access_mf(ctx, rhs).map(|rhs| Self::new_op(op, rhs))
+    }
+
     pub fn new_mod(
         ctx: &Context,
         op: ModifyOperation,
         loc: impl Into<ModifyLocation>,
     ) -> Option<Self> {
-        Some(Self::Modify(AbstractModify {
+        let loc = loc.into();
+        let is_long = !(if loc.is_index() { ctx.xf() } else { ctx.mf() }).get()?;
+        Some(Self::Modify(AbstractModify { op, loc, is_long }))
+    }
+
+    pub fn new_cmp(ctx: &Context, op: CompareType, rhs: AbstractAccess) -> Option<Self> {
+        let is_short = op.lhs().is_short(ctx)?;
+        Some(Self::Compare(AbstractCompare {
             op,
-            loc: loc.into(),
-            is_long: !ctx.mf().get()?,
+            rhs: OperateRhs::from_access(rhs, is_short),
         }))
     }
 
-    pub fn new_bra(cart: &Cart, ctx: &Context, cond: BranchCondition, label: NearLabel) -> Self {
+    pub fn new_bra(
+        cart: &Cart,
+        ctx: &Context,
+        cond: Option<BranchCondition>,
+        label: NearLabel,
+    ) -> Self {
         let label = AbstractCodeLabel::from_addr(cart, label.take(ctx.pc));
         Self::Branch(AbstractBranch { cond, label })
     }
@@ -499,18 +624,22 @@ impl Rewriter {
             Instruction::OraD(_d) => todo!(),
             Instruction::AslD(_d) => todo!(),
             Instruction::OraDil(_dil) => todo!(),
-            Instruction::Php => todo!(),
+            Instruction::Php => push(AbstractInstruction::Push(AbstractPush::P)),
             Instruction::OraI(_i) => todo!(),
             Instruction::AslAc => todo!(),
             Instruction::Phd => todo!(),
             Instruction::TsbA(_a) => todo!(),
-            Instruction::OraA(_a) => todo!(),
+            Instruction::OraA(a) => push(AbstractInstruction::new_op_mf(
+                ctx,
+                OperateType::Or,
+                AbstractAccess::new_abs(cart, ctx, a),
+            )?),
             Instruction::AslA(_a) => todo!(),
             Instruction::OraAl(_al) => todo!(),
             Instruction::Bpl(label) => push(AbstractInstruction::new_bra(
                 cart,
                 ctx,
-                BranchCondition::Pl,
+                Some(BranchCondition::Pl),
                 label,
             )),
             Instruction::OraDiy(_diy) => todo!(),
@@ -555,9 +684,13 @@ impl Rewriter {
             Instruction::AndD(_d) => todo!(),
             Instruction::RolD(_d) => todo!(),
             Instruction::AndDil(_dil) => todo!(),
-            Instruction::Plp => todo!(),
+            Instruction::Plp => push(AbstractInstruction::Pop(AbstractPop::P)),
             Instruction::AndI(_i) => todo!(),
-            Instruction::RolAc => todo!(),
+            Instruction::RolAc => push(AbstractInstruction::new_mod(
+                ctx,
+                ModifyOperation::Rol,
+                ModifyLocation::A,
+            )?),
             Instruction::Pld => todo!(),
             Instruction::BitA(_a) => todo!(),
             Instruction::AndA(_a) => todo!(),
@@ -566,7 +699,7 @@ impl Rewriter {
             Instruction::Bmi(label) => push(AbstractInstruction::new_bra(
                 cart,
                 ctx,
-                BranchCondition::Mi,
+                Some(BranchCondition::Mi),
                 label,
             )),
             Instruction::AndDiy(_diy) => todo!(),
@@ -600,18 +733,23 @@ impl Rewriter {
             Instruction::EorD(_d) => todo!(),
             Instruction::LsrD(_d) => todo!(),
             Instruction::EorDil(_dil) => todo!(),
-            Instruction::Pha => todo!(),
+            Instruction::Pha => push(AbstractInstruction::Push(AbstractPush::A {
+                long: !ctx.mf().get()?,
+            })),
             Instruction::EorI(_i) => todo!(),
             Instruction::LsrAc => todo!(),
-            Instruction::Phk => todo!(),
-            Instruction::Jmp(_absolute_label) => todo!(),
+            Instruction::Phk => push(AbstractInstruction::Push(AbstractPush::K)),
+            Instruction::Jmp(label) => push(AbstractInstruction::Branch(AbstractBranch {
+                cond: None,
+                label: AbstractCodeLabel::from_addr(cart, label.take(ctx.pc)),
+            })),
             Instruction::EorA(_a) => todo!(),
             Instruction::LsrA(_a) => todo!(),
             Instruction::EorAl(_al) => todo!(),
             Instruction::Bvc(label) => push(AbstractInstruction::new_bra(
                 cart,
                 ctx,
-                BranchCondition::Vc,
+                Some(BranchCondition::Vc),
                 label,
             )),
             Instruction::EorDiy(_diy) => todo!(),
@@ -625,7 +763,9 @@ impl Rewriter {
                 push(AbstractInstruction::ClrFlags(pf::I));
             }
             Instruction::EorAy(_ay) => todo!(),
-            Instruction::Phy => todo!(),
+            Instruction::Phy => push(AbstractInstruction::Push(AbstractPush::Y {
+                long: !ctx.xf().get()?,
+            })),
             Instruction::Tcd => {
                 push(AbstractInstruction::Transfer16(AbstractTransfer16 {
                     src: TransferSrc16::A,
@@ -636,7 +776,9 @@ impl Rewriter {
             Instruction::EorAx(_ax) => todo!(),
             Instruction::LsrAx(_ax) => todo!(),
             Instruction::EorAlx(_alx) => todo!(),
-            Instruction::Rts => todo!(),
+            Instruction::Rts => push(AbstractInstruction::Return(AbstractReturn {
+                is_long: false,
+            })),
             Instruction::AdcDxi(_dxi) => todo!(),
             Instruction::Per(_relative_label) => todo!(),
             Instruction::AdcS(_s) => todo!(),
@@ -647,12 +789,20 @@ impl Rewriter {
             Instruction::AdcD(_d) => todo!(),
             Instruction::RorD(_d) => todo!(),
             Instruction::AdcDil(_dil) => todo!(),
-            Instruction::Pla => todo!(),
+            Instruction::Pla => push(AbstractInstruction::Pop(AbstractPop::A {
+                long: !ctx.mf().get()?,
+            })),
             Instruction::AdcI(i) => {
                 push(AbstractInstruction::new_op(OperateType::Adc, i));
             }
-            Instruction::RorAc => todo!(),
-            Instruction::Rtl => todo!(),
+            Instruction::RorAc => push(AbstractInstruction::new_mod(
+                ctx,
+                ModifyOperation::Ror,
+                ModifyLocation::A,
+            )?),
+            Instruction::Rtl => push(AbstractInstruction::Return(AbstractReturn {
+                is_long: true,
+            })),
             Instruction::Jmpi(_indirect_label) => todo!(),
             Instruction::AdcA(_a) => todo!(),
             Instruction::RorA(_a) => todo!(),
@@ -660,7 +810,7 @@ impl Rewriter {
             Instruction::Bvs(label) => push(AbstractInstruction::new_bra(
                 cart,
                 ctx,
-                BranchCondition::Vs,
+                Some(BranchCondition::Vs),
                 label,
             )),
             Instruction::AdcDiy(_diy) => todo!(),
@@ -680,7 +830,7 @@ impl Rewriter {
             Instruction::AdcAx(_ax) => todo!(),
             Instruction::RorAx(_ax) => todo!(),
             Instruction::AdcAlx(_alx) => todo!(),
-            Instruction::Bra(_near_label) => todo!(),
+            Instruction::Bra(label) => push(AbstractInstruction::new_bra(cart, ctx, None, label)),
             Instruction::StaDxi(_dxi) => todo!(),
             Instruction::Brl(_relative_label) => todo!(),
             Instruction::StaS(_s) => todo!(),
@@ -703,7 +853,7 @@ impl Rewriter {
                     TransferSrc16::X.to_instr(TransferDst16::A).into()
                 });
             }
-            Instruction::Phb => todo!(),
+            Instruction::Phb => push(AbstractInstruction::Push(AbstractPush::B)),
             Instruction::StyA(_a) => todo!(),
             Instruction::StaA(a) => {
                 let dst = AbstractAccess::new_abs(cart, ctx, a);
@@ -717,7 +867,7 @@ impl Rewriter {
             Instruction::Bcc(label) => push(AbstractInstruction::new_bra(
                 cart,
                 ctx,
-                BranchCondition::Cc,
+                Some(BranchCondition::Cc),
                 label,
             )),
             Instruction::StaDiy(_diy) => todo!(),
@@ -806,8 +956,11 @@ impl Rewriter {
                     TransferSrc16::A.to_instr(TransferDst16::X).into()
                 });
             }
-            Instruction::Plb => todo!(),
-            Instruction::LdyA(_a) => todo!(),
+            Instruction::Plb => push(AbstractInstruction::Pop(AbstractPop::B)),
+            Instruction::LdyA(a) => push(AbstractInstruction::new_ldy(
+                ctx,
+                AbstractAccess::new_abs(cart, ctx, a),
+            )?),
             Instruction::LdaA(a) => push(AbstractInstruction::new_lda(
                 ctx,
                 AbstractAccess::new_abs(cart, ctx, a),
@@ -820,7 +973,7 @@ impl Rewriter {
             Instruction::Bcs(label) => push(AbstractInstruction::new_bra(
                 cart,
                 ctx,
-                BranchCondition::Cs,
+                Some(BranchCondition::Cs),
                 label,
             )),
             Instruction::LdaDiy(_diy) => todo!(),
@@ -829,7 +982,10 @@ impl Rewriter {
             Instruction::LdyDx(_dx) => todo!(),
             Instruction::LdaDx(_dx) => todo!(),
             Instruction::LdxDy(_dy) => todo!(),
-            Instruction::LdaDily(_dily) => todo!(),
+            Instruction::LdaDily(dily) => push(AbstractInstruction::new_lda(
+                ctx,
+                AbstractAccess::new_indly(cart, ctx, dily),
+            )?),
             Instruction::Clv => {
                 push(AbstractInstruction::ClrFlags(pf::V));
             }
@@ -846,7 +1002,10 @@ impl Rewriter {
             Instruction::LdaAx(_ax) => todo!(),
             Instruction::LdxAy(_ay) => todo!(),
             Instruction::LdaAlx(_alx) => todo!(),
-            Instruction::CpyI(_i) => todo!(),
+            Instruction::CpyI(i) => push(AbstractInstruction::Compare(AbstractCompare {
+                op: CompareType::Cmp(CmpLhs::Y),
+                rhs: i.into(),
+            })),
             Instruction::CmpDxi(_dxi) => todo!(),
             Instruction::Rep(val) => {
                 if !val.is_empty() {
@@ -871,7 +1030,10 @@ impl Rewriter {
                     is_long: !ctx.xf().get()?,
                 }));
             }
-            Instruction::CmpI(_i) => todo!(),
+            Instruction::CmpI(i) => push(AbstractInstruction::Compare(AbstractCompare {
+                op: CompareType::Cmp(CmpLhs::X),
+                rhs: i.into(),
+            })),
             Instruction::Dex => {
                 push(AbstractInstruction::Modify(AbstractModify {
                     op: ModifyOperation::Dec,
@@ -880,14 +1042,22 @@ impl Rewriter {
                 }));
             }
             Instruction::Wai => todo!(),
-            Instruction::CpyA(_a) => todo!(),
-            Instruction::CmpA(_a) => todo!(),
+            Instruction::CpyA(a) => push(AbstractInstruction::new_cmp(
+                ctx,
+                CompareType::Cmp(CmpLhs::Y),
+                AbstractAccess::new_abs(cart, ctx, a),
+            )?),
+            Instruction::CmpA(a) => push(AbstractInstruction::new_cmp(
+                ctx,
+                CompareType::Cmp(CmpLhs::A),
+                AbstractAccess::new_abs(cart, ctx, a),
+            )?),
             Instruction::DecA(_a) => todo!(),
             Instruction::CmpAl(_al) => todo!(),
             Instruction::Bne(label) => push(AbstractInstruction::new_bra(
                 cart,
                 ctx,
-                BranchCondition::Ne,
+                Some(BranchCondition::Ne),
                 label,
             )),
             Instruction::CmpDiy(_diy) => todo!(),
@@ -901,13 +1071,18 @@ impl Rewriter {
                 push(AbstractInstruction::ClrFlags(pf::D));
             }
             Instruction::CmpAy(_ay) => todo!(),
-            Instruction::Phx => todo!(),
+            Instruction::Phx => push(AbstractInstruction::Push(AbstractPush::X {
+                long: !ctx.xf().get()?,
+            })),
             Instruction::Stp => todo!(),
             Instruction::Jmli(_indirect_long_label) => todo!(),
             Instruction::CmpAx(_ax) => todo!(),
             Instruction::DecAx(_ax) => todo!(),
             Instruction::CmpAlx(_alx) => todo!(),
-            Instruction::CpxI(_i) => todo!(),
+            Instruction::CpxI(i) => push(AbstractInstruction::Compare(AbstractCompare {
+                op: CompareType::Cmp(CmpLhs::X),
+                rhs: i.into(),
+            })),
             Instruction::SbcDxi(_dxi) => todo!(),
             Instruction::Sep(val) => {
                 if !val.is_empty() {
@@ -936,15 +1111,19 @@ impl Rewriter {
                 push(AbstractInstruction::new_op(OperateType::Sbc, i));
             }
             Instruction::Nop => todo!(),
-            Instruction::Xba => todo!(),
-            Instruction::CpxA(_a) => todo!(),
+            Instruction::Xba => push(AbstractInstruction::Xba),
+            Instruction::CpxA(a) => push(AbstractInstruction::new_cmp(
+                ctx,
+                CompareType::Cmp(CmpLhs::X),
+                AbstractAccess::new_abs(cart, ctx, a),
+            )?),
             Instruction::SbcA(_a) => todo!(),
             Instruction::IncA(_a) => todo!(),
             Instruction::SbcAl(_al) => todo!(),
             Instruction::Beq(label) => push(AbstractInstruction::new_bra(
                 cart,
                 ctx,
-                BranchCondition::Eq,
+                Some(BranchCondition::Eq),
                 label,
             )),
             Instruction::SbcDiy(_diy) => todo!(),
