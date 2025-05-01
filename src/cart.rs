@@ -3,6 +3,7 @@ use bytemuck::*;
 use crate::{
     addr::Addr,
     addr_space::{CartMemoryLocation, MemoryLocation, SystemMemoryLocation},
+    tvl::{TBool, TU24},
 };
 
 #[derive(Debug, Clone)]
@@ -421,6 +422,17 @@ impl Cart {
         } else {
             MemoryLocation::Cart(self.map(addr))
         }
+    }
+
+    pub fn map_full_unknown(&self, addr: TU24) -> Option<MemoryLocation> {
+        let addr = if addr.addr().msb().is_known_false()
+            && addr.bank().contains_any(0x40).is_known_false()
+        {
+            Addr::new(0, addr.addr().get()?)
+        } else {
+            addr.get()?
+        };
+        Some(self.map_full(addr))
     }
 
     pub fn reverse_map_rom(&self, rom_addr: u32) -> Option<Addr> {

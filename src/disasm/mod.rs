@@ -20,17 +20,10 @@ pub struct Stack {
 
 impl Stack {
     pub fn unify(&mut self, rhs: &Self) {
-        if self.items.len() <= rhs.items.len() {
-            for (i, j) in self.items.iter_mut().zip(&rhs.items) {
-                *i = i.either(*j)
-            }
-        } else {
-            let mut newslf = rhs.clone();
-            for (i, j) in newslf.items.iter_mut().zip(&self.items) {
-                *i = i.either(*j)
-            }
-            *self = newslf
+        for (i, j) in self.items.iter_mut().zip(&rhs.items) {
+            *i = i.either(*j)
         }
+        self.items.truncate(rhs.items.len());
     }
 
     pub fn push(&mut self, val: TU8) {
@@ -128,7 +121,7 @@ impl Context {
 
     pub fn read8(&self, cart: &Cart, addr: impl Into<TU24>) -> Option<TU8> {
         let addr = addr.into();
-        let key = cart.map_full(addr.get()?);
+        let key = cart.map_full_unknown(addr)?;
         match &key {
             MemoryLocation::System(SystemMemoryLocation::Wram(_))
             | MemoryLocation::Cart(CartMemoryLocation::Sram(_)) => self.map.get(&key).copied(),
@@ -139,7 +132,12 @@ impl Context {
 
     pub fn write8(&mut self, cart: &Cart, addr: impl Into<TU24>, val: TU8) -> Option<()> {
         let addr = addr.into();
-        let key = cart.map_full(addr.get()?);
+        let Some(key) = cart.map_full_unknown(addr) else {
+            // a write to an unknown address could theoretically corrupt every
+            // memory cell so we have to forget everything we have known
+            self.map.clear();
+            return None;
+        };
         if val.is_fully_unknown() {
             self.map.remove(&key);
         } else {
@@ -215,18 +213,12 @@ impl Context {
         }
     }
 
-    pub fn resolve_ax(&self, _cart: &Cart, ax: &am::Ax) -> AddrModeRes {
-        AddrModeRes {
-            is24: true,
-            addr: TU24::new(self.b, ax.0).add24(self.x),
-        }
+    pub fn resolve_ax(&self, cart: &Cart, ax: &am::Ax) -> AddrModeRes {
+        self.resolve_a(cart, &am::A(ax.0)).offset24(self.x)
     }
 
-    pub fn resolve_ay(&self, _cart: &Cart, ay: &am::Ay) -> AddrModeRes {
-        AddrModeRes {
-            is24: true,
-            addr: TU24::new(self.b, ay.0).add24(self.y),
-        }
+    pub fn resolve_ay(&self, cart: &Cart, ay: &am::Ay) -> AddrModeRes {
+        self.resolve_a(cart, &am::A(ay.0)).offset24(self.y)
     }
 
     pub fn resolve_al(&self, _cart: &Cart, al: &am::Al) -> AddrModeRes {
@@ -236,11 +228,8 @@ impl Context {
         }
     }
 
-    pub fn resolve_alx(&self, _cart: &Cart, alx: &am::Alx) -> AddrModeRes {
-        AddrModeRes {
-            is24: true,
-            addr: TU24::from(alx.0).add24(self.x),
-        }
+    pub fn resolve_alx(&self, cart: &Cart, alx: &am::Alx) -> AddrModeRes {
+        self.resolve_al(cart, &am::Al(alx.0)).offset24(self.x)
     }
 
     pub fn resolve_d(&self, _cart: &Cart, d: &am::D) -> AddrModeRes {
@@ -399,19 +388,22 @@ pub enum CallStackRoot {
 pub struct CallStackItem {
     pub addr: Addr,
     pub is_long: bool,
+    pub stack_offset: u16,
 }
 
 impl CallStackItem {
-    pub const fn new_short(addr: Addr) -> Self {
+    pub const fn new_short(addr: Addr, stack_offset: u16) -> Self {
         Self {
             is_long: false,
+            stack_offset,
             addr,
         }
     }
 
-    pub const fn new_long(addr: Addr) -> Self {
+    pub const fn new_long(addr: Addr, stack_offset: u16) -> Self {
         Self {
             is_long: true,
+            stack_offset,
             addr,
         }
     }
@@ -435,23 +427,25 @@ impl CallStack {
         }
     }
 
-    pub fn push(&mut self, item: CallStackItem) {
-        if let Some(ix) = self.items.iter().position(|a| a == &item) {
+    pub fn push(&mut self, item: CallStackItem) -> bool {
+        if let Some(ix) = self.items.iter().position(|a| a.addr == item.addr) {
             // If the call stack already contais this address, we are trapped
             // in an infinity loop. We can break the cycle by reverting the call
             // stack to the original address.
             self.items.truncate(ix + 1);
+            true
         } else {
             self.items.push(item);
+            false
         }
     }
 
-    pub fn push_short(&mut self, addr: Addr) {
-        self.push(CallStackItem::new_short(addr));
+    pub fn push_short(&mut self, addr: Addr, stack_offset: u16) -> bool {
+        self.push(CallStackItem::new_short(addr, stack_offset))
     }
 
-    pub fn push_long(&mut self, addr: Addr) {
-        self.push(CallStackItem::new_long(addr));
+    pub fn push_long(&mut self, addr: Addr, stack_offset: u16) -> bool {
+        self.push(CallStackItem::new_long(addr, stack_offset))
     }
 
     pub fn pop(&mut self) -> Option<CallStackItem> {
@@ -473,6 +467,32 @@ impl CallStack {
 
     pub const fn root(&self) -> &CallStackRoot {
         &self.root
+    }
+}
+
+impl core::fmt::Display for CallStack {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self.root {
+            CallStackRoot::Vector(0xffe4) => write!(f, "COP")?,
+            CallStackRoot::Vector(0xffe6) => write!(f, "BRK")?,
+            CallStackRoot::Vector(0xffea) => write!(f, "NMI")?,
+            CallStackRoot::Vector(0xffee) => write!(f, "IRQ")?,
+            CallStackRoot::Vector(0xfff4) => write!(f, "COPe")?,
+            CallStackRoot::Vector(0xfffa) => write!(f, "NMIe")?,
+            CallStackRoot::Vector(0xfffc) => write!(f, "RESET")?,
+            CallStackRoot::Vector(0xfffe) => write!(f, "IRQe")?,
+            CallStackRoot::Vector(v) => write!(f, "vec{v:04X}")?,
+            CallStackRoot::Table(addr) => write!(f, "{{{addr}}}")?,
+        };
+        for it in &self.items {
+            write!(f, ",")?;
+            if it.is_long {
+                write!(f, "[{}]", it.addr)?;
+            } else {
+                write!(f, "({})", it.addr)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -584,7 +604,7 @@ pub struct Disassembler {
     pub code_annotations: BTreeMap<Addr, VecMap<CallStack, AnnotatedInstruction>>,
     pub jump_tables: BTreeMap<Addr, JumpTable>,
     pub jump_table_items: HashMap<Addr, Addr>,
-    pub vectors: Vec<u16>,
+    pub vectors: Vec<(u16, u16)>,
     pub unified_code_annotations: BTreeMap<Addr, AnnotatedInstruction>,
     heads: Vec<Head>,
 }
@@ -622,6 +642,9 @@ impl Disassembler {
         let Some(addr) = lo.zip(hi).map(|(lo, hi)| u16::from_le_bytes([lo, hi])) else {
             return;
         };
+        if !self.vectors.contains(&(vec, addr)) {
+            self.vectors.push((vec, addr));
+        }
         let ctx = Context {
             a: 0.into(),
             x: 0.into(),
@@ -646,9 +669,6 @@ impl Disassembler {
                 continue;
             }
             let vec = 0xffe0 | (i << 1);
-            if !self.vectors.contains(&vec) {
-                self.vectors.push(vec);
-            }
             self.add_vector(cart, vec);
         }
     }
@@ -935,7 +955,7 @@ impl Disassembler {
                 let mut iter = map.iter();
                 let (_, first) = iter.next()?;
                 let mut first = first.clone();
-                for (_, rhs) in iter {
+                for (_cs, rhs) in iter {
                     first.pre.unify(&rhs.pre);
                 }
                 Some((*addr, first))
@@ -1011,22 +1031,14 @@ impl Disassembler {
         }
     }
 
-    fn sync_callstack(
-        &mut self,
-        ctx: &Context,
-        pc: Option<CallStackItem>,
-        call_stack: &mut CallStack,
-    ) -> bool {
-        if pc.is_some_and(|item| item.return_addr() == ctx.pc) {
-            return false;
+    fn sync_callstack(&mut self, ctx: &Context, call_stack: &mut CallStack) {
+        while call_stack
+            .items
+            .last()
+            .is_some_and(|item| item.stack_offset as usize + 2 > ctx.stack.items.len())
+        {
+            call_stack.items.pop();
         }
-        while let Some(item) = call_stack.items().last() {
-            if item.return_addr() == ctx.pc {
-                return false;
-            }
-            call_stack.pop();
-        }
-        true
     }
 
     fn instr_stz(&mut self, cart: &Cart, ctx: &mut Context, addr: AddrModeRes) {
@@ -1577,17 +1589,25 @@ impl Disassembler {
             Instruction::Jsr(dst) => {
                 let old_pc = ctx.pc;
                 if ctx.call_subroutine(cart, Addr::new(ctx.pc.bank, dst.0)) {
+                    let offset = ctx.stack.items.len() as u16;
                     ctx.stack.push16(old_pc.addr.wrapping_sub(1).into());
-                    call_stack.push_short(instr_pc);
+                    if call_stack.push_short(instr_pc, offset) {
+                        // recursion
+                        return Some(instr);
+                    }
                 }
             }
             Instruction::AndDxi(dxi) => todo!(),
             Instruction::Jsl(dst) => {
                 let old_pc = ctx.pc;
                 if ctx.call_subroutine(cart, *dst) {
+                    let offset = ctx.stack.items.len() as u16;
                     ctx.stack.push(old_pc.bank.into());
                     ctx.stack.push16(old_pc.addr.wrapping_sub(1).into());
-                    call_stack.push_long(instr_pc);
+                    if call_stack.push_long(instr_pc, offset) {
+                        // recursion
+                        return Some(instr);
+                    }
                 }
             }
             Instruction::AndS(s) => todo!(),
@@ -1763,14 +1783,17 @@ impl Disassembler {
                 self.instr_eor(cart, &mut ctx, addr);
             }
             Instruction::Rts => {
-                let cs_pc = call_stack.pop();
+                self.sync_callstack(&ctx, &mut call_stack);
                 if let Some(new_pc) = ctx.stack.pop16().get() {
                     ctx.pc.addr = new_pc.wrapping_add(1);
-                    if self.sync_callstack(&ctx, cs_pc, &mut call_stack) {
-                        // synchronization failed, so we are unable to analyze the return
+                    if call_stack
+                        .pop()
+                        .is_some_and(|item| item.return_addr() != ctx.pc)
+                    {
+                        // something is broken, better stop disassembling from here
                         return Some(instr);
                     }
-                } else if let Some(item) = cs_pc {
+                } else if let Some(item) = call_stack.pop() {
                     // fall back to our call stack implementation if the system stack got corrupted
                     ctx.pc = item.return_addr();
                 } else {
@@ -1805,14 +1828,17 @@ impl Disassembler {
             Instruction::AdcI(i) => self.instr_adcimm(&mut ctx, (*i).into(), false),
             Instruction::RorAc => self.instr_rorimm(&mut ctx),
             Instruction::Rtl => {
-                let cs_pc = call_stack.pop();
+                self.sync_callstack(&ctx, &mut call_stack);
                 if let Some(new_pc) = ctx.stack.pop24().get() {
                     ctx.pc = new_pc.add16(1);
-                    if self.sync_callstack(&ctx, cs_pc, &mut call_stack) {
-                        // synchronization failed, so we are unable to analyze the return
+                    if call_stack
+                        .pop()
+                        .is_some_and(|item| item.return_addr() != ctx.pc)
+                    {
+                        // something is broken, better stop disassembling from here
                         return Some(instr);
                     }
-                } else if let Some(item) = cs_pc {
+                } else if let Some(item) = call_stack.pop() {
                     // fall back to our call stack implementation if the system stack got corrupted
                     ctx.pc = item.return_addr();
                 } else {
@@ -2368,7 +2394,6 @@ impl Disassembler {
                 self.instr_adc(cart, &mut ctx, addr, true);
             }
         }
-
         self.heads.push(Head { ctx, call_stack });
         Some(instr)
     }

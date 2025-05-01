@@ -126,28 +126,10 @@ impl JumpList {
     }
 }
 
-fn call_stack_to_text(call_stack: &CallStack) -> String {
-    let mut s = match call_stack.root() {
-        CallStackRoot::Vector(0xffe4) => "COP".to_string(),
-        CallStackRoot::Vector(0xffe6) => "BRK".to_string(),
-        CallStackRoot::Vector(0xffea) => "NMI".to_string(),
-        CallStackRoot::Vector(0xffee) => "IRQ".to_string(),
-        CallStackRoot::Vector(0xfff4) => "COPe".to_string(),
-        CallStackRoot::Vector(0xfffa) => "NMIe".to_string(),
-        CallStackRoot::Vector(0xfffc) => "RESET".to_string(),
-        CallStackRoot::Vector(0xfffe) => "IRQe".to_string(),
-        CallStackRoot::Vector(v) => format!("vec{v:04X}"),
-        CallStackRoot::Table(addr) => format!("<{addr}>"),
-    };
-    for it in call_stack.items() {
-        s.push_str(" > ");
-        if it.is_long {
-            s.push_str(&format!("[{}]", it.addr));
-        } else {
-            s.push_str(&format!("({})", it.addr));
-        }
-    }
-    s
+fn call_stack_to_text(call_stack: Option<&CallStack>) -> String {
+    call_stack
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "UNIFY".to_string())
 }
 
 pub struct DisassemblyView {
@@ -813,16 +795,8 @@ impl DisassemblyView {
         ui: &mut egui::Ui,
     ) -> Option<(Addr, &'a AnnotatedInstruction)> {
         let addr = self.selected_addr?;
-        if self.selected_callstack.is_none() {
-            self.selected_callstack = Some(
-                disasm
-                    .get_annotation_with_shortest_callstack(addr)?
-                    .0
-                    .clone(),
-            );
-        }
-        let call_stack = self.selected_callstack.as_mut().unwrap();
-        let mut selected = &*call_stack;
+        let call_stack = self.selected_callstack.as_ref();
+        let mut selected = call_stack;
         ui.horizontal(|ui| {
             ui.heading(format!("{addr}"));
             if ui.button(" ").clicked() {
@@ -833,20 +807,27 @@ impl DisassemblyView {
         egui::ComboBox::from_label("Call Stack")
             .selected_text(call_stack_to_text(selected))
             .show_ui(ui, |ui| {
-                for item in disasm
-                    .code_annotations
-                    .get(&addr)
-                    .map(|a| a.keys())
-                    .into_iter()
-                    .flatten()
-                {
+                for item in core::iter::once(None).chain(
+                    disasm
+                        .code_annotations
+                        .get(&addr)
+                        .map(|a| a.keys())
+                        .into_iter()
+                        .flatten()
+                        .map(Some),
+                ) {
                     ui.selectable_value(&mut selected, item, call_stack_to_text(item));
                 }
             });
         if selected != call_stack {
-            *call_stack = selected.clone();
+            self.selected_callstack = selected.cloned();
         }
-        disasm.get_annotation(addr, call_stack).map(|a| (addr, a))
+        (if let Some(call_stack) = &self.selected_callstack {
+            disasm.get_annotation(addr, call_stack)
+        } else {
+            disasm.unified_code_annotations.get(&addr)
+        })
+        .map(|a| (addr, a))
     }
 
     fn show_sidepanel(&mut self, cart: &OriginalCart, disasm: &Disassembler, ui: &mut egui::Ui) {

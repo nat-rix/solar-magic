@@ -49,6 +49,10 @@ impl<K: Ord, V> VecMap<K, V> {
     pub fn retain(&mut self, mut f: impl FnMut(&K, &mut V) -> bool) {
         self.items.retain_mut(|(k, v)| f(k, v));
     }
+
+    pub fn clear(&mut self) {
+        self.items.clear();
+    }
 }
 
 impl<K, V> Default for VecMap<K, V> {

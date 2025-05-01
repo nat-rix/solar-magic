@@ -43,6 +43,10 @@ impl TBool {
     pub const fn is_true_or_unknown(&self) -> bool {
         matches!(self, Self::True | Self::Unknown)
     }
+
+    pub const fn is_known_false(&self) -> bool {
+        matches!(self, Self::False)
+    }
 }
 
 impl From<bool> for TBool {
@@ -618,6 +622,22 @@ impl From<crate::instruction::am::I> for TUnknown {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn either_u8() {
+        let x10 = TU8::new(0);
+        let x00 = TU8::UNKNOWN;
+        let x11 = TU8::new(0xff);
+        assert_eq!(x10.either(x10), x10);
+        assert_eq!(x10.either(x00), x00);
+        assert_eq!(x10.either(x11), x00);
+        assert_eq!(x00.either(x10), x00);
+        assert_eq!(x00.either(x00), x00);
+        assert_eq!(x00.either(x11), x00);
+        assert_eq!(x11.either(x10), x00);
+        assert_eq!(x11.either(x00), x00);
+        assert_eq!(x11.either(x11), x11);
+    }
 
     #[test]
     fn adc_u8_known_no_carry() {
