@@ -3,7 +3,7 @@ use egui::ahash::{HashMap, HashMapExt};
 use solar_magic::{
     addr::Addr,
     cart::Cart,
-    disasm::{AnnotatedInstruction, CallStack, CallStackRoot, Disassembler, JumpTableType},
+    disasm::{AnnotatedInstruction, CallStack, Disassembler, JumpTableType},
     instruction::{InstructionArgument, InstructionNamingConvention, OpCode},
     original_cart::OriginalCart,
     tvl::{TBool, TU8, TU16, TU24},

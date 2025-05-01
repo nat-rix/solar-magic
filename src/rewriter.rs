@@ -5,11 +5,7 @@ use crate::{
     addr_space::MemoryLocation,
     cart::Cart,
     disasm::{AnnotatedInstruction, Context, Disassembler},
-    instruction::{
-        FlagSet, Instruction, InstructionArgument, InstructionFlagDependency, InstructionType,
-        NearLabel, am,
-    },
-    pf,
+    instruction::{FlagSet, InstructionArgument, InstructionFlagDependency, InstructionType, am},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -33,6 +29,9 @@ pub enum IndexRegister {
 pub enum AccessType {
     Absolute(Option<IndexRegister>),
     Direct(Option<IndexRegister>),
+    Indirect,
+    IndirectY,
+    IndirectLong,
     IndirectLongY,
 }
 
@@ -107,6 +106,27 @@ impl AbstractAccess {
         }
     }
 
+    pub fn new_di(cart: &Cart, ctx: &Context, di: am::Di) -> Self {
+        Self {
+            ty: AccessType::Indirect,
+            ..Self::new_d(cart, ctx, am::D(di.0))
+        }
+    }
+
+    pub fn new_diy(cart: &Cart, ctx: &Context, diy: am::Diy) -> Self {
+        Self {
+            ty: AccessType::IndirectY,
+            ..Self::new_d(cart, ctx, am::D(diy.0))
+        }
+    }
+
+    pub fn new_dil(cart: &Cart, ctx: &Context, dil: am::Dil) -> Self {
+        Self {
+            ty: AccessType::IndirectLong,
+            ..Self::new_d(cart, ctx, am::D(dil.0))
+        }
+    }
+
     pub fn new_dily(cart: &Cart, ctx: &Context, dily: am::Dily) -> Self {
         Self {
             ty: AccessType::IndirectLongY,
@@ -119,6 +139,7 @@ impl AbstractAccess {
 pub enum AbstractCodeLabel {
     Rom(BlockId),
     Addr(Addr),
+    IndirectLong(MemoryLocation),
 }
 
 impl AbstractCodeLabel {
@@ -132,15 +153,16 @@ impl AbstractCodeLabel {
 
 #[derive(Debug, Clone)]
 pub struct AbstractMove {
-    pub src: MemoryLocation,
-    pub dst: MemoryLocation,
+    pub src: Option<MemoryLocation>,
+    pub dst: Option<MemoryLocation>,
     /// `0` means `0x10000` bytes
-    pub count: u16,
+    pub count: Option<u16>,
     pub is_positive: bool,
 }
 
 #[derive(Debug, Clone)]
 pub enum AbstractArgument {
+    Signature(u8),
     Access(AbstractAccess),
     Imm8(u8),
     Imm16(u16),
@@ -159,7 +181,7 @@ impl From<AbstractAccess> for AbstractArgument {
 pub struct AbstractInstruction {
     pub ty: InstructionType,
     pub arg: Option<AbstractArgument>,
-    pub is_short: bool,
+    pub is_short: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -278,15 +300,14 @@ impl Rewriter {
         let opcode = ann.instruction.opcode();
         let opty = opcode.instr_ty();
         let orig_arg = ann.instruction.arg();
-        // println!("pc: {}", ctx.pc);
         let is_short = match opty.flag_dependency() {
-            None => false,
-            Some(InstructionFlagDependency::M) => ctx.mf().get()?,
-            Some(InstructionFlagDependency::X) => ctx.xf().get()?,
+            None => Some(false),
+            Some(InstructionFlagDependency::M) => ctx.mf().get(),
+            Some(InstructionFlagDependency::X) => ctx.xf().get(),
         };
         let arg = orig_arg.map(|orig_arg| {
             Some(match orig_arg {
-                InstructionArgument::Signature(_) => todo!(),
+                InstructionArgument::Signature(sig) => AbstractArgument::Signature(sig),
                 InstructionArgument::A(a) => AbstractAccess::new_a(cart, ctx, a).into(),
                 InstructionArgument::Ax(ax) => AbstractAccess::new_ax(cart, ctx, ax).into(),
                 InstructionArgument::Ay(ay) => AbstractAccess::new_ay(cart, ctx, ay).into(),
@@ -296,10 +317,10 @@ impl Rewriter {
                 InstructionArgument::Dx(dx) => AbstractAccess::new_dx(cart, ctx, dx).into(),
                 InstructionArgument::Dy(dy) => AbstractAccess::new_dy(cart, ctx, dy).into(),
                 InstructionArgument::Dxi(_dxi) => todo!(),
-                InstructionArgument::Diy(_diy) => todo!(),
+                InstructionArgument::Diy(diy) => AbstractAccess::new_diy(cart, ctx, diy).into(),
                 InstructionArgument::Dily(dily) => AbstractAccess::new_dily(cart, ctx, dily).into(),
-                InstructionArgument::Di(_di) => todo!(),
-                InstructionArgument::Dil(_dil) => todo!(),
+                InstructionArgument::Di(di) => AbstractAccess::new_di(cart, ctx, di).into(),
+                InstructionArgument::Dil(dil) => AbstractAccess::new_dil(cart, ctx, dil).into(),
                 InstructionArgument::S(_s) => todo!(),
                 InstructionArgument::Siy(_siy) => todo!(),
                 InstructionArgument::I(i) => match i {
@@ -320,15 +341,16 @@ impl Rewriter {
                 }
                 InstructionArgument::IndirectLabel(_label) => todo!(),
                 InstructionArgument::IndirectIndexedLabel(_label) => todo!(),
-                InstructionArgument::IndirectLongLabel(_label) => todo!(),
+                InstructionArgument::IndirectLongLabel(label) => {
+                    let location = cart.map_full(Addr::new(0, label.0));
+                    AbstractArgument::CodeLabel(AbstractCodeLabel::IndirectLong(location))
+                }
                 InstructionArgument::Flags(flags) => AbstractArgument::Flags(flags),
                 InstructionArgument::Move(dst_bank, src_bank) => {
                     let is_positive = matches!(opty, InstructionType::Mvp);
-                    let count = ctx.a.get()?;
-                    let src_addr = ctx.x.get()?;
-                    let dst_addr = ctx.y.get()?;
-                    let src = cart.map_full(Addr::new(src_bank, src_addr));
-                    let dst = cart.map_full(Addr::new(dst_bank, dst_addr));
+                    let count = ctx.a.get();
+                    let [src, dst] = [(src_bank, ctx.x), (dst_bank, ctx.y)]
+                        .map(|(b, x)| x.get().map(|x| cart.map_full(Addr::new(b, x))));
                     AbstractArgument::Move(AbstractMove {
                         src,
                         dst,

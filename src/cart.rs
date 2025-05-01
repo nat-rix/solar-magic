@@ -3,7 +3,7 @@ use bytemuck::*;
 use crate::{
     addr::Addr,
     addr_space::{CartMemoryLocation, MemoryLocation, SystemMemoryLocation},
-    tvl::{TBool, TU24},
+    tvl::TU24,
 };
 
 #[derive(Debug, Clone)]
