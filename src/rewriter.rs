@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::{
     addr::Addr,
@@ -33,6 +33,16 @@ pub enum AccessType {
     IndirectY,
     IndirectLong,
     IndirectLongY,
+}
+
+impl AccessType {
+    pub const fn index_register(&self) -> Option<IndexRegister> {
+        match self {
+            AccessType::Absolute(ix) | AccessType::Direct(ix) => *ix,
+            AccessType::IndirectY | AccessType::IndirectLongY => Some(IndexRegister::Y),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -218,10 +228,90 @@ impl BlockMap {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AccessSize {
+    U8,
+    U16,
+    U24,
+    Block(Option<u16>),
+}
+
+impl AccessSize {
+    pub fn bits(&self) -> usize {
+        match self {
+            Self::U8 => 8,
+            Self::U16 => 16,
+            Self::U24 => 24,
+            Self::Block(bytes) => bytes.map(|val| val as usize * 8).unwrap_or(0),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DirectDatarefAccess {
+    pub indexed: Option<IndexRegister>,
+    pub size: AccessSize,
+}
+
+#[derive(Debug, Clone)]
+pub enum SimpleDatarefIndirection {
+    Data(DirectDatarefAccess),
+    Code,
+}
+
+#[derive(Debug, Clone)]
+pub struct SimpleDataref {
+    pub access: DirectDatarefAccess,
+    pub indirect: Option<SimpleDatarefIndirection>,
+    pub offset: u32,
+}
+
+pub struct DatatypeDescription<'a, F>(&'a DirectDatarefAccess, F);
+
+impl<'a, F: Fn(&mut core::fmt::Formatter) -> core::fmt::Result> core::fmt::Display
+    for DatatypeDescription<'a, F>
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        if let AccessSize::Block(size) = self.0.size {
+            return if let Some(size) = size {
+                write!(f, "Block of {size} bytes")
+            } else {
+                write!(f, "Block of an unknown amount of bytes")
+            };
+        }
+        if self.0.indexed.is_some() {
+            write!(f, "Array of ")?;
+        }
+        write!(f, "{}-bit ", self.0.size.bits())?;
+        self.1(f)?;
+        if self.0.indexed.is_some() {
+            write!(f, "s")?;
+        }
+        Ok(())
+    }
+}
+
+impl SimpleDataref {
+    pub fn description(&self) -> impl core::fmt::Display {
+        DatatypeDescription(&self.access, |f: &mut core::fmt::Formatter| {
+            match &self.indirect {
+                Some(SimpleDatarefIndirection::Data(data)) => write!(
+                    f,
+                    "{}",
+                    DatatypeDescription(data, |f: &mut core::fmt::Formatter| write!(f, "integer"),)
+                ),
+                Some(SimpleDatarefIndirection::Code) => write!(f, "function pointer"),
+                None => write!(f, "integer"),
+            }
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Rewriter {
-    blocks: HashMap<BlockId, Block>,
+    pub blocks: HashMap<BlockId, Block>,
     block_starts: BlockMap,
+    pub simple_datarefs: BTreeMap<u32, Vec<SimpleDataref>>,
 }
 
 impl Rewriter {
@@ -229,6 +319,7 @@ impl Rewriter {
         Self {
             blocks: Default::default(),
             block_starts: Default::default(),
+            simple_datarefs: Default::default(),
         }
     }
 
@@ -286,6 +377,111 @@ impl Rewriter {
                 todo!()
             }
         }
+        for (id, block) in self.blocks.iter() {
+            let instr_offset = id.start_rom_offset;
+            let BlockContent::Code(block) = &block.content else {
+                continue;
+            };
+            for instr in &block.instrs {
+                if let Some((dataref, data_offset)) =
+                    self.extract_simple_dataref(instr, instr_offset)
+                {
+                    println!(
+                        "{}: {}",
+                        cart.reverse_map_rom(data_offset).unwrap_or(Addr::NULL),
+                        dataref.description()
+                    );
+                    self.simple_datarefs
+                        .entry(data_offset)
+                        .or_default()
+                        .push(dataref);
+                }
+            }
+        }
+    }
+
+    fn extract_simple_dataref(
+        &self,
+        instr: &AbstractInstruction,
+        offset: u32,
+    ) -> Option<(SimpleDataref, u32)> {
+        let size = if instr.is_short.unwrap_or(false) {
+            AccessSize::U8
+        } else {
+            AccessSize::U16
+        };
+        Some(match instr.arg.as_ref()? {
+            AbstractArgument::Access(access) => {
+                let data_offset = access.location.rom_offset()?;
+                (
+                    match access.ty {
+                        AccessType::Absolute(indexed) | AccessType::Direct(indexed) => {
+                            SimpleDataref {
+                                access: DirectDatarefAccess { indexed, size },
+                                indirect: None,
+                                offset,
+                            }
+                        }
+                        arg @ (AccessType::Indirect | AccessType::IndirectY) => SimpleDataref {
+                            access: DirectDatarefAccess {
+                                indexed: None,
+                                size: AccessSize::U16,
+                            },
+                            indirect: Some(SimpleDatarefIndirection::Data(DirectDatarefAccess {
+                                indexed: arg.index_register(),
+                                size,
+                            })),
+                            offset,
+                        },
+                        arg @ (AccessType::IndirectLong | AccessType::IndirectLongY) => {
+                            SimpleDataref {
+                                access: DirectDatarefAccess {
+                                    indexed: None,
+                                    size: AccessSize::U24,
+                                },
+                                indirect: Some(SimpleDatarefIndirection::Data(
+                                    DirectDatarefAccess {
+                                        indexed: arg.index_register(),
+                                        size,
+                                    },
+                                )),
+                                offset,
+                            }
+                        }
+                    },
+                    data_offset,
+                )
+            }
+            AbstractArgument::CodeLabel(AbstractCodeLabel::IndirectLong(loc)) => {
+                let data_offset = loc.rom_offset()?;
+                (
+                    SimpleDataref {
+                        access: DirectDatarefAccess {
+                            indexed: None,
+                            size: AccessSize::U24,
+                        },
+                        indirect: Some(SimpleDatarefIndirection::Code),
+                        offset,
+                    },
+                    data_offset,
+                )
+            }
+            AbstractArgument::Move(mv) => {
+                let data_offset = mv.src?.rom_offset()?;
+                (
+                    SimpleDataref {
+                        access: DirectDatarefAccess {
+                            indexed: None,
+                            size: AccessSize::Block(mv.count),
+                        },
+                        indirect: None,
+                        offset,
+                    },
+                    data_offset,
+                )
+            }
+            _ => return None,
+        })
     }
 
     fn rewrite_instr(cart: &Cart, ann: &AnnotatedInstruction, block: &mut Block) -> Option<()> {

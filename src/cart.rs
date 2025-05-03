@@ -410,10 +410,7 @@ impl Cart {
     }
 
     pub fn map_rom(&self, addr: Addr) -> Option<u32> {
-        match self.map_full(addr) {
-            MemoryLocation::Cart(CartMemoryLocation::Rom(off)) => Some(off),
-            _ => None,
-        }
+        self.map_full(addr).rom_offset()
     }
 
     pub fn map_full(&self, addr: Addr) -> MemoryLocation {
@@ -471,10 +468,6 @@ impl Cart {
     }
 
     pub fn read_rom(&self, addr: Addr) -> Option<u8> {
-        if let MemoryLocation::Cart(CartMemoryLocation::Rom(rom)) = self.map_full(addr) {
-            Some(self.rom.read(rom))
-        } else {
-            None
-        }
+        self.map_rom(addr).map(|rom| self.rom.read(rom))
     }
 }

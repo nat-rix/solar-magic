@@ -47,3 +47,12 @@ pub enum MemoryLocation {
     System(SystemMemoryLocation),
     Cart(CartMemoryLocation),
 }
+
+impl MemoryLocation {
+    pub const fn rom_offset(&self) -> Option<u32> {
+        match self {
+            Self::Cart(CartMemoryLocation::Rom(off)) => Some(*off),
+            _ => None,
+        }
+    }
+}

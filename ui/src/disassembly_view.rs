@@ -6,6 +6,7 @@ use solar_magic::{
     disasm::{AnnotatedInstruction, CallStack, Disassembler, JumpTableType},
     instruction::{InstructionArgument, InstructionNamingConvention, OpCode},
     original_cart::OriginalCart,
+    rewriter::Rewriter,
     tvl::{TBool, TU8, TU16, TU24},
 };
 
@@ -151,7 +152,13 @@ impl DisassemblyView {
         }
     }
 
-    fn show_grid(&mut self, cart: &Cart, disasm: Option<&Disassembler>, ui: &mut egui::Ui) {
+    fn show_grid(
+        &mut self,
+        cart: &Cart,
+        disasm: Option<&Disassembler>,
+        rewriter: Option<&Rewriter>,
+        ui: &mut egui::Ui,
+    ) {
         let rect = ui
             .with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
                 ui.vertical(|ui| {
@@ -196,6 +203,7 @@ impl DisassemblyView {
                             self.show_grid_content(
                                 cart,
                                 disasm,
+                                rewriter,
                                 &mut body,
                                 &mut grid_items,
                                 &mut jumps,
@@ -307,6 +315,7 @@ impl DisassemblyView {
         &mut self,
         cart: &Cart,
         disasm: Option<&Disassembler>,
+        rewriter: Option<&Rewriter>,
         body: &mut egui_extras::TableBody,
         grid_items: &mut HashMap<Addr, f32>,
         jumps: &mut HashMap<Addr, Vec<Addr>>,
@@ -426,7 +435,18 @@ impl DisassemblyView {
                     });
                     row.col(|ui| {
                         ui.horizontal(|ui| {
-                            ui.add_space(ui.available_width());
+                            if let Some(rewriter) = rewriter {
+                                if let Some(drefs) = cart
+                                    .map_rom(addr)
+                                    .and_then(|offset| rewriter.simple_datarefs.get(&offset))
+                                {
+                                    ui.weak(format!(
+                                        "{} DREF{}",
+                                        drefs.len(),
+                                        if drefs.len() == 1 { "" } else { "S" }
+                                    ));
+                                }
+                            }
                         });
                     });
                     addr = addr.add24(1);
@@ -830,7 +850,13 @@ impl DisassemblyView {
         .map(|a| (addr, a))
     }
 
-    fn show_sidepanel(&mut self, cart: &OriginalCart, disasm: &Disassembler, ui: &mut egui::Ui) {
+    fn show_sidepanel(
+        &mut self,
+        cart: &OriginalCart,
+        disasm: &Disassembler,
+        rewriter: Option<&Rewriter>,
+        ui: &mut egui::Ui,
+    ) {
         ui.vertical(|ui| {
             if let Some((_addr, annotation)) = self.show_sidepanel_call_stack(disasm, ui) {
                 ui.separator();
@@ -908,6 +934,47 @@ impl DisassemblyView {
                             });
                     });
                 });
+            } else if let (Some(rewriter), Some(addr)) = (rewriter, self.selected_addr) {
+                if let Some(off) = cart.cart.map_rom(addr) {
+                    if let Some(drefs) = rewriter.simple_datarefs.get(&off) {
+                        ui.separator();
+                        ui.group(|ui| {
+                            ui.heading("References");
+                            ui.separator();
+                            egui_extras::TableBuilder::new(ui)
+                                .striped(true)
+                                .auto_shrink(false)
+                                .column(egui_extras::Column::auto())
+                                .column(egui_extras::Column::remainder())
+                                .header(8.0, |mut row| {
+                                    row.col(|ui| {
+                                        ui.strong("Code Address");
+                                    });
+                                    row.col(|ui| {
+                                        ui.strong("Data Type");
+                                    });
+                                })
+                                .body(|mut body| {
+                                    for dref in drefs {
+                                        body.row(20.0, |mut row| {
+                                            row.col(|ui| {
+                                                self.show_addr_helper(
+                                                    cart.cart
+                                                        .reverse_map_rom(dref.offset)
+                                                        .unwrap_or(Addr::NULL),
+                                                    true,
+                                                    ui,
+                                                );
+                                            });
+                                            row.col(|ui| {
+                                                ui.label(dref.description().to_string());
+                                            });
+                                        });
+                                    }
+                                })
+                        });
+                    }
+                }
             }
         });
     }
@@ -923,15 +990,24 @@ impl crate::app::App {
                 .show_animated_inside(ui, self.disassembly_view.selected_addr.is_some(), |ui| {
                     ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
-                            self.disassembly_view.show_sidepanel(cart, disasm, ui);
+                            self.disassembly_view.show_sidepanel(
+                                cart,
+                                disasm,
+                                self.project.rewriter.as_deref(),
+                                ui,
+                            );
                         });
                     });
                 });
         }
         egui::CentralPanel::default().show_inside(ui, |ui| {
             if let Some(cart) = &self.project.cart {
-                self.disassembly_view
-                    .show_grid(&cart.cart, self.project.disasm.as_deref(), ui);
+                self.disassembly_view.show_grid(
+                    &cart.cart,
+                    self.project.disasm.as_deref(),
+                    self.project.rewriter.as_deref(),
+                    ui,
+                );
             } else {
                 ui.centered_and_justified(|ui| ui.strong("no cartridge loaded yet"));
             }
