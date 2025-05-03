@@ -1,13 +1,54 @@
 use eframe::egui;
 
+use crate::app::PanelViewType;
+
 impl crate::app::App {
     pub fn overlay(&mut self, ctx: &egui::Context) {
         self.about_window(ctx);
         self.show_cart_info(ctx);
         egui::TopBottomPanel::top("menu-panel").show(ctx, |ui| {
             self.menu(ui);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 1.0;
+                for variant in PanelViewType::variants() {
+                    let button =
+                        egui::Button::new(variant.name()).selected(self.panel_view == variant);
+                    if ui.add(button).clicked() {
+                        self.panel_view = variant;
+                    }
+                }
+            });
         });
-        self.show_disassembly(ctx);
+
+        self.loader_panel(ctx);
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(0))
+            .show(ctx, |ui| match self.panel_view {
+                PanelViewType::Disassembly => {
+                    self.show_disassembly(ui);
+                }
+                PanelViewType::Graph => {
+                    ui.label("TODO: graph");
+                }
+            });
+    }
+
+    pub fn loader_panel(&mut self, ctx: &egui::Context) {
+        let desc = self.project.get_description();
+        if desc.is_some() {
+            ctx.output_mut(|out| out.cursor_icon = egui::CursorIcon::Progress);
+        }
+        egui::TopBottomPanel::bottom("thread-info-panel")
+            .resizable(false)
+            .show_animated(ctx, desc.is_some(), |ui| {
+                if let Some(desc) = desc {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.small(desc);
+                    });
+                }
+            });
     }
 
     pub fn about_window(&mut self, ctx: &egui::Context) {

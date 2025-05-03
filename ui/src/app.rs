@@ -9,6 +9,32 @@ pub const DESCRIPTION: &str =
     "is a  Level Editor for the game Super Mario World on the Super Nintendo Entertainment System.";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+macro_rules! define_panel_view_types {
+    ($($var:ident),* $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum PanelViewType {
+            $($var),*
+        }
+
+        impl PanelViewType {
+            pub const fn variants() -> [Self; {[$(Self::$var),*].len()}] {
+                [$(Self::$var),*]
+            }
+
+            pub const fn name(&self) -> &'static str {
+                match self {
+                    $(Self::$var => stringify!($var)),*
+                }
+            }
+        }
+    };
+}
+
+define_panel_view_types! {
+    Disassembly,
+    Graph,
+}
+
 pub struct App {
     pub about_window: bool,
     pub cart_info_window: bool,
@@ -16,6 +42,7 @@ pub struct App {
     pub shortcuts: Shortcuts,
     pub errors: Errors,
     pub disassembly_view: DisassemblyView,
+    pub panel_view: PanelViewType,
 }
 
 impl App {
@@ -27,6 +54,7 @@ impl App {
             shortcuts: Default::default(),
             errors: Errors::new(),
             disassembly_view: DisassemblyView::new(),
+            panel_view: PanelViewType::Disassembly,
         };
         crate::theme::set_style(&ctx.egui_ctx);
         crate::fonts::set_fonts(&ctx.egui_ctx);

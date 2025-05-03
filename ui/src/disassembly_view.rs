@@ -914,27 +914,13 @@ impl DisassemblyView {
 }
 
 impl crate::app::App {
-    pub fn show_disassembly(&mut self, ctx: &egui::Context) {
-        let desc = self.project.get_description();
-        if desc.is_some() {
-            ctx.output_mut(|out| out.cursor_icon = egui::CursorIcon::Progress);
-        }
-        egui::TopBottomPanel::bottom("thread-info-panel")
-            .resizable(false)
-            .show_animated(ctx, desc.is_some(), |ui| {
-                if let Some(desc) = desc {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.small(desc);
-                    });
-                }
-            });
+    pub fn show_disassembly(&mut self, ui: &mut egui::Ui) {
         if let (Some(cart), Some(disasm)) = (&self.project.cart, &self.project.disasm) {
             egui::SidePanel::right("disassembly-sidepanel")
                 .resizable(true)
                 .width_range(..)
                 .max_width(f32::INFINITY)
-                .show_animated(ctx, self.disassembly_view.selected_addr.is_some(), |ui| {
+                .show_animated_inside(ui, self.disassembly_view.selected_addr.is_some(), |ui| {
                     ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             self.disassembly_view.show_sidepanel(cart, disasm, ui);
@@ -942,7 +928,7 @@ impl crate::app::App {
                     });
                 });
         }
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
             if let Some(cart) = &self.project.cart {
                 self.disassembly_view
                     .show_grid(&cart.cart, self.project.disasm.as_deref(), ui);
