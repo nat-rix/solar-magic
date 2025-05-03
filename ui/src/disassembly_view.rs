@@ -141,8 +141,8 @@ pub struct DisassemblyView {
     jump_list: JumpList,
 }
 
-impl DisassemblyView {
-    pub fn new() -> Self {
+impl Default for DisassemblyView {
+    fn default() -> Self {
         Self {
             start_addr: Addr::new(0, 0x8000),
             selected_addr: None,
@@ -151,7 +151,9 @@ impl DisassemblyView {
             jump_list: Default::default(),
         }
     }
+}
 
+impl DisassemblyView {
     fn show_grid(
         &mut self,
         cart: &Cart,

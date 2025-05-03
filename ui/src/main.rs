@@ -1,6 +1,7 @@
 mod addr_widget;
 mod app;
 mod cart_info;
+mod data_block_view;
 mod disassembly_view;
 mod error;
 mod fonts;

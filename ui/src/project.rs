@@ -17,7 +17,7 @@ enum LoaderMsg {
     FileOpen(Option<PathBuf>),
     NewCart(Arc<OriginalCart>),
     NewDisasm(Arc<Disassembler>),
-    NewRewrite(Arc<Rewriter>),
+    NewRewrite(Box<Rewriter>),
     IoError(Arc<std::io::Error>),
 }
 
@@ -33,7 +33,7 @@ pub struct AppProject {
     is_picker_open: bool,
     pub cart: Option<Arc<OriginalCart>>,
     pub disasm: Option<Arc<Disassembler>>,
-    pub rewriter: Option<Arc<Rewriter>>,
+    pub rewriter: Option<Box<Rewriter>>,
 }
 
 impl AppProject {
@@ -152,7 +152,7 @@ impl AppProject {
             *desc.lock() = Some("Static rewrite cartridge disassembly".to_string());
             let mut rewriter = solar_magic::rewriter::Rewriter::new();
             rewriter.rewrite(&cart.cart, &disasm);
-            let _err = sender.send(LoaderMsg::NewRewrite(Arc::new(rewriter)));
+            let _err = sender.send(LoaderMsg::NewRewrite(Box::new(rewriter)));
         });
     }
 

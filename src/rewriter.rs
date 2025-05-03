@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::BTreeMap;
 
 use crate::{
     addr::Addr,
@@ -8,7 +8,7 @@ use crate::{
     instruction::{FlagSet, InstructionArgument, InstructionFlagDependency, InstructionType, am},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlockId {
     start_rom_offset: u32,
 }
@@ -16,6 +16,10 @@ pub struct BlockId {
 impl BlockId {
     const fn from_off(start_rom_offset: u32) -> Self {
         Self { start_rom_offset }
+    }
+
+    pub const fn get_offset(&self) -> u32 {
+        self.start_rom_offset
     }
 }
 
@@ -192,6 +196,7 @@ pub struct AbstractInstruction {
     pub ty: InstructionType,
     pub arg: Option<AbstractArgument>,
     pub is_short: Option<bool>,
+    pub original_offset: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -200,9 +205,33 @@ pub struct CodeBlock {
 }
 
 #[derive(Debug, Clone)]
+pub enum PointerType {
+    Ptr16,
+    Ptr24,
+}
+
+#[derive(Debug, Clone)]
+pub enum PrimitiveDataType {
+    U8,
+    U16,
+    Pointer(PointerType),
+}
+
+#[derive(Debug, Clone)]
+pub enum DataType {
+    Primitive(PrimitiveDataType),
+    Array(PrimitiveDataType),
+}
+
+#[derive(Debug, Clone)]
+pub struct DataBlock {
+    pub data_type: DataType,
+}
+
+#[derive(Debug, Clone)]
 pub enum BlockContent {
     Code(CodeBlock),
-    Data,
+    Data(DataBlock),
 }
 
 #[derive(Debug, Clone)]
@@ -217,31 +246,33 @@ impl Block {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-struct BlockMap {
-    starts: BTreeSet<u32>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PrimitiveSize {
+    U8,
+    U16,
+    U24,
 }
 
-impl BlockMap {
-    pub fn get(&self, val: u32) -> Option<u32> {
-        self.starts.range(..=val).last().copied()
+impl PrimitiveSize {
+    pub const fn bits(&self) -> u8 {
+        match self {
+            Self::U8 => 8,
+            Self::U16 => 16,
+            Self::U24 => 24,
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AccessSize {
-    U8,
-    U16,
-    U24,
+    Primitive(PrimitiveSize),
     Block(Option<u16>),
 }
 
 impl AccessSize {
     pub fn bits(&self) -> usize {
         match self {
-            Self::U8 => 8,
-            Self::U16 => 16,
-            Self::U24 => 24,
+            Self::Primitive(p) => p.bits().into(),
             Self::Block(bytes) => bytes.map(|val| val as usize * 8).unwrap_or(0),
         }
     }
@@ -309,8 +340,7 @@ impl SimpleDataref {
 
 #[derive(Debug, Clone)]
 pub struct Rewriter {
-    pub blocks: HashMap<BlockId, Block>,
-    block_starts: BlockMap,
+    pub blocks: BTreeMap<BlockId, Block>,
     pub simple_datarefs: BTreeMap<u32, Vec<SimpleDataref>>,
 }
 
@@ -318,7 +348,6 @@ impl Rewriter {
     pub fn new() -> Self {
         Self {
             blocks: Default::default(),
-            block_starts: Default::default(),
             simple_datarefs: Default::default(),
         }
     }
@@ -350,10 +379,19 @@ impl Rewriter {
                 table.offset_to_addr(cart, table_off, *table_start)
             });
 
-        self.block_starts.starts = iter0
+        self.blocks = iter0
             .chain(iter1)
             .chain(iter2)
             .filter_map(|addr| cart.map_rom(addr))
+            .map(|off| {
+                (
+                    BlockId::from_off(off),
+                    Block {
+                        content: BlockContent::Code(CodeBlock { instrs: vec![] }),
+                        size: 0,
+                    },
+                )
+            })
             .collect();
     }
 
@@ -363,17 +401,11 @@ impl Rewriter {
             let Some(off) = cart.map_rom(*addr) else {
                 continue;
             };
-            let Some(block_start) = self.block_starts.get(off) else {
+            let Some((_block_id, block)) = self.blocks.range_mut(..=BlockId::from_off(off)).last()
+            else {
                 continue;
             };
-            let block_id = BlockId {
-                start_rom_offset: block_start,
-            };
-            let block = self.blocks.entry(block_id).or_insert_with(|| Block {
-                content: BlockContent::Code(CodeBlock { instrs: vec![] }),
-                size: 0,
-            });
-            if Self::rewrite_instr(cart, ann, block).is_none() {
+            if Self::rewrite_instr(cart, ann, block, off).is_none() {
                 todo!()
             }
         }
@@ -386,17 +418,65 @@ impl Rewriter {
                 if let Some((dataref, data_offset)) =
                     self.extract_simple_dataref(instr, instr_offset)
                 {
-                    println!(
-                        "{}: {}",
-                        cart.reverse_map_rom(data_offset).unwrap_or(Addr::NULL),
-                        dataref.description()
-                    );
                     self.simple_datarefs
                         .entry(data_offset)
                         .or_default()
                         .push(dataref);
                 }
             }
+        }
+        let mut contiguous: u32 = 0;
+        for (data_offset, drefs) in self.simple_datarefs.iter().rev() {
+            if self
+                .simple_datarefs
+                .contains_key(&data_offset.wrapping_sub(1))
+            {
+                contiguous = contiguous.wrapping_add(1);
+                continue;
+            }
+            let ty = self.get_dref_data_type(drefs, contiguous);
+            let block_id = self
+                .blocks
+                .range(BlockId::from_off(*data_offset)..)
+                .next()
+                .map(|(id, _)| *id);
+            let end = if let Some(block_id) = block_id {
+                block_id.start_rom_offset
+            } else {
+                cart.rom.len()
+            };
+            let size = end.wrapping_sub(*data_offset);
+            self.blocks.insert(
+                BlockId::from_off(*data_offset),
+                Block {
+                    content: BlockContent::Data(DataBlock { data_type: ty }),
+                    size,
+                },
+            );
+        }
+    }
+
+    fn get_dref_data_type(&self, drefs: &[SimpleDataref], contiguous: u32) -> DataType {
+        let pointer = drefs.iter().find_map(|dref| {
+            dref.indirect.as_ref().map(|_ind| match dref.access.size {
+                AccessSize::Primitive(PrimitiveSize::U24) => PointerType::Ptr24,
+                _ => PointerType::Ptr16,
+            })
+        });
+        if let Some(pointer) = pointer {
+            return DataType::Primitive(PrimitiveDataType::Pointer(pointer));
+        }
+        let ty = match contiguous {
+            1 => PrimitiveDataType::U8,
+            2 => PrimitiveDataType::U16,
+            3 => PrimitiveDataType::Pointer(PointerType::Ptr24),
+            _ => return DataType::Array(PrimitiveDataType::U8),
+        };
+        let indexed = drefs.iter().find_map(|dref| dref.access.indexed).is_some();
+        if indexed {
+            DataType::Array(ty)
+        } else {
+            DataType::Primitive(ty)
         }
     }
 
@@ -405,11 +485,11 @@ impl Rewriter {
         instr: &AbstractInstruction,
         offset: u32,
     ) -> Option<(SimpleDataref, u32)> {
-        let size = if instr.is_short.unwrap_or(false) {
-            AccessSize::U8
+        let size = AccessSize::Primitive(if instr.is_short.unwrap_or(false) {
+            PrimitiveSize::U8
         } else {
-            AccessSize::U16
-        };
+            PrimitiveSize::U16
+        });
         Some(match instr.arg.as_ref()? {
             AbstractArgument::Access(access) => {
                 let data_offset = access.location.rom_offset()?;
@@ -425,7 +505,7 @@ impl Rewriter {
                         arg @ (AccessType::Indirect | AccessType::IndirectY) => SimpleDataref {
                             access: DirectDatarefAccess {
                                 indexed: None,
-                                size: AccessSize::U16,
+                                size: AccessSize::Primitive(PrimitiveSize::U16),
                             },
                             indirect: Some(SimpleDatarefIndirection::Data(DirectDatarefAccess {
                                 indexed: arg.index_register(),
@@ -437,7 +517,7 @@ impl Rewriter {
                             SimpleDataref {
                                 access: DirectDatarefAccess {
                                     indexed: None,
-                                    size: AccessSize::U24,
+                                    size: AccessSize::Primitive(PrimitiveSize::U24),
                                 },
                                 indirect: Some(SimpleDatarefIndirection::Data(
                                     DirectDatarefAccess {
@@ -458,7 +538,7 @@ impl Rewriter {
                     SimpleDataref {
                         access: DirectDatarefAccess {
                             indexed: None,
-                            size: AccessSize::U24,
+                            size: AccessSize::Primitive(PrimitiveSize::U24),
                         },
                         indirect: Some(SimpleDatarefIndirection::Code),
                         offset,
@@ -484,7 +564,12 @@ impl Rewriter {
         })
     }
 
-    fn rewrite_instr(cart: &Cart, ann: &AnnotatedInstruction, block: &mut Block) -> Option<()> {
+    fn rewrite_instr(
+        cart: &Cart,
+        ann: &AnnotatedInstruction,
+        block: &mut Block,
+        original_offset: u32,
+    ) -> Option<()> {
         let ctx = &ann.pre;
         let Block {
             content: BlockContent::Code(block),
@@ -565,6 +650,7 @@ impl Rewriter {
             ty: opty,
             arg,
             is_short,
+            original_offset: Some(original_offset),
         });
         // println!("{:x?}", block.instrs.last());
         *size = size.wrapping_add(u32::from(ann.instruction.size()));

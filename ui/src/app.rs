@@ -1,7 +1,8 @@
 use eframe::egui;
 
 use crate::{
-    disassembly_view::DisassemblyView, error::Errors, project::AppProject, shortcuts::Shortcuts,
+    data_block_view::DataBlockView, disassembly_view::DisassemblyView, error::Errors,
+    project::AppProject, shortcuts::Shortcuts,
 };
 
 pub const NAME: &str = "Solar Magic";
@@ -20,19 +21,29 @@ macro_rules! define_panel_view_types {
             pub const fn variants() -> [Self; {[$(Self::$var),*].len()}] {
                 [$(Self::$var),*]
             }
-
-            pub const fn name(&self) -> &'static str {
-                match self {
-                    $(Self::$var => stringify!($var)),*
-                }
-            }
         }
     };
 }
 
 define_panel_view_types! {
     Disassembly,
-    Graph,
+    DataBlock,
+}
+
+impl PanelViewType {
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::Disassembly => "Disassembly",
+            Self::DataBlock => "Data Block",
+        }
+    }
+
+    pub const fn icon(&self) -> &'static str {
+        match self {
+            Self::Disassembly => " ",
+            Self::DataBlock => "󰱾",
+        }
+    }
 }
 
 pub struct App {
@@ -42,6 +53,7 @@ pub struct App {
     pub shortcuts: Shortcuts,
     pub errors: Errors,
     pub disassembly_view: DisassemblyView,
+    pub data_block_view: DataBlockView,
     pub panel_view: PanelViewType,
 }
 
@@ -53,7 +65,8 @@ impl App {
             project: AppProject::new(),
             shortcuts: Default::default(),
             errors: Errors::new(),
-            disassembly_view: DisassemblyView::new(),
+            disassembly_view: Default::default(),
+            data_block_view: Default::default(),
             panel_view: PanelViewType::Disassembly,
         };
         crate::theme::set_style(&ctx.egui_ctx);

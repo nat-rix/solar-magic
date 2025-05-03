@@ -21,3 +21,6 @@ features = ["derive"]
 
 [dependencies.rfd]
 version = "0.15"
+
+[dependencies.nucleo-matcher]
+version = "0.3"

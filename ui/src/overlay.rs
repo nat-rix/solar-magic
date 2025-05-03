@@ -12,7 +12,8 @@ impl crate::app::App {
                 ui.spacing_mut().item_spacing.x = 1.0;
                 for variant in PanelViewType::variants() {
                     let button =
-                        egui::Button::new(variant.name()).selected(self.panel_view == variant);
+                        egui::Button::new(format!("{} {}", variant.icon(), variant.name()))
+                            .selected(self.panel_view == variant);
                     if ui.add(button).clicked() {
                         self.panel_view = variant;
                     }
@@ -28,8 +29,8 @@ impl crate::app::App {
                 PanelViewType::Disassembly => {
                     self.show_disassembly(ui);
                 }
-                PanelViewType::Graph => {
-                    ui.label("TODO: graph");
+                PanelViewType::DataBlock => {
+                    self.show_data_block_view(ui);
                 }
             });
     }
