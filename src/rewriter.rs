@@ -29,6 +29,15 @@ pub enum IndexRegister {
     Y,
 }
 
+impl core::fmt::Display for IndexRegister {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::X => f.write_str("X"),
+            Self::Y => f.write_str("Y"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum AccessType {
     Absolute(Option<IndexRegister>),
@@ -50,8 +59,35 @@ impl AccessType {
 }
 
 #[derive(Debug, Clone)]
+pub enum AbstractLabel {
+    Block(BlockId),
+    Location(MemoryLocation),
+}
+
+impl AbstractLabel {
+    pub fn from_location(location: MemoryLocation) -> Self {
+        if let Some(off) = location.rom_offset() {
+            Self::Block(BlockId::from_off(off))
+        } else {
+            Self::Location(location)
+        }
+    }
+
+    pub fn from_addr(cart: &Cart, addr: Addr) -> Self {
+        Self::from_location(cart.map_full(addr))
+    }
+
+    pub const fn rom_offset(&self) -> Option<u32> {
+        match self {
+            Self::Block(id) => Some(id.start_rom_offset),
+            Self::Location(loc) => loc.rom_offset(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct AbstractAccess {
-    pub location: MemoryLocation,
+    pub label: AbstractLabel,
     pub ty: AccessType,
 }
 
@@ -87,7 +123,7 @@ impl AbstractAccess {
     pub fn new_al(cart: &Cart, al: am::Al) -> Self {
         Self {
             ty: AccessType::Absolute(None),
-            location: cart.map_full(al.0),
+            label: AbstractLabel::from_addr(cart, al.0),
         }
     }
 
@@ -102,7 +138,7 @@ impl AbstractAccess {
         let addr = ctx.d.get().unwrap_or(0).wrapping_add(d.0 as _);
         Self {
             ty: AccessType::Direct(None),
-            location: cart.map_full(Addr::new(0, addr)),
+            label: AbstractLabel::from_addr(cart, Addr::new(0, addr)),
         }
     }
 
@@ -151,24 +187,20 @@ impl AbstractAccess {
 
 #[derive(Debug, Clone)]
 pub enum AbstractCodeLabel {
-    Rom(BlockId),
-    Addr(Addr),
-    IndirectLong(MemoryLocation),
+    Direct(AbstractLabel),
+    IndirectLong(AbstractLabel),
 }
 
 impl AbstractCodeLabel {
-    pub fn from_addr(cart: &Cart, addr: Addr) -> Self {
-        cart.map_rom(addr)
-            .map(BlockId::from_off)
-            .map(Self::Rom)
-            .unwrap_or(Self::Addr(addr))
+    pub fn new_direct(cart: &Cart, addr: Addr) -> Self {
+        Self::Direct(AbstractLabel::from_addr(cart, addr))
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct AbstractMove {
-    pub src: Option<MemoryLocation>,
-    pub dst: Option<MemoryLocation>,
+    pub src: Option<AbstractLabel>,
+    pub dst: Option<AbstractLabel>,
     /// `0` means `0x10000` bytes
     pub count: Option<u16>,
     pub is_positive: bool,
@@ -202,6 +234,16 @@ pub struct AbstractInstruction {
 #[derive(Debug, Clone)]
 pub struct CodeBlock {
     instrs: Vec<AbstractInstruction>,
+}
+
+impl CodeBlock {
+    pub fn instrs(&self) -> &[AbstractInstruction] {
+        &self.instrs
+    }
+
+    pub const fn instrs_mut(&mut self) -> &mut Vec<AbstractInstruction> {
+        &mut self.instrs
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -492,7 +534,7 @@ impl Rewriter {
         });
         Some(match instr.arg.as_ref()? {
             AbstractArgument::Access(access) => {
-                let data_offset = access.location.rom_offset()?;
+                let data_offset = access.label.rom_offset()?;
                 (
                     match access.ty {
                         AccessType::Absolute(indexed) | AccessType::Direct(indexed) => {
@@ -547,7 +589,7 @@ impl Rewriter {
                 )
             }
             AbstractArgument::Move(mv) => {
-                let data_offset = mv.src?.rom_offset()?;
+                let data_offset = mv.src.as_ref()?.rom_offset()?;
                 (
                     SimpleDataref {
                         access: DirectDatarefAccess {
@@ -609,29 +651,31 @@ impl Rewriter {
                     am::I::U16(i) => AbstractArgument::Imm16(i),
                 },
                 InstructionArgument::NearLabel(label) => AbstractArgument::CodeLabel(
-                    AbstractCodeLabel::from_addr(cart, label.take(ctx.pc)),
+                    AbstractCodeLabel::new_direct(cart, label.take(ctx.pc)),
                 ),
                 InstructionArgument::RelativeLabel(label) => AbstractArgument::CodeLabel(
-                    AbstractCodeLabel::from_addr(cart, label.take(ctx.pc)),
+                    AbstractCodeLabel::new_direct(cart, label.take(ctx.pc)),
                 ),
                 InstructionArgument::AbsoluteLabel(label) => AbstractArgument::CodeLabel(
-                    AbstractCodeLabel::from_addr(cart, label.take(ctx.pc)),
+                    AbstractCodeLabel::new_direct(cart, label.take(ctx.pc)),
                 ),
                 InstructionArgument::LongLabel(label) => {
-                    AbstractArgument::CodeLabel(AbstractCodeLabel::from_addr(cart, label))
+                    AbstractArgument::CodeLabel(AbstractCodeLabel::new_direct(cart, label))
                 }
                 InstructionArgument::IndirectLabel(_label) => todo!(),
                 InstructionArgument::IndirectIndexedLabel(_label) => todo!(),
                 InstructionArgument::IndirectLongLabel(label) => {
-                    let location = cart.map_full(Addr::new(0, label.0));
-                    AbstractArgument::CodeLabel(AbstractCodeLabel::IndirectLong(location))
+                    let label = AbstractLabel::from_addr(cart, Addr::new(0, label.0));
+                    AbstractArgument::CodeLabel(AbstractCodeLabel::IndirectLong(label))
                 }
                 InstructionArgument::Flags(flags) => AbstractArgument::Flags(flags),
                 InstructionArgument::Move(dst_bank, src_bank) => {
                     let is_positive = matches!(opty, InstructionType::Mvp);
                     let count = ctx.a.get();
-                    let [src, dst] = [(src_bank, ctx.x), (dst_bank, ctx.y)]
-                        .map(|(b, x)| x.get().map(|x| cart.map_full(Addr::new(b, x))));
+                    let [src, dst] = [(src_bank, ctx.x), (dst_bank, ctx.y)].map(|(b, x)| {
+                        x.get()
+                            .map(|x| AbstractLabel::from_addr(cart, Addr::new(b, x)))
+                    });
                     AbstractArgument::Move(AbstractMove {
                         src,
                         dst,

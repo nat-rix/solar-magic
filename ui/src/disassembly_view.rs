@@ -4,7 +4,7 @@ use solar_magic::{
     addr::Addr,
     cart::Cart,
     disasm::{AnnotatedInstruction, CallStack, Disassembler, JumpTableType},
-    instruction::{InstructionArgument, InstructionNamingConvention, OpCode},
+    instruction::{FlagSet, InstructionArgument, InstructionNamingConvention, OpCode},
     original_cart::OriginalCart,
     rewriter::Rewriter,
     tvl::{TBool, TU8, TU16, TU24},
@@ -16,11 +16,12 @@ const GRID_JUMPARROW_INDENT: f32 = 20.0;
 const GRID_JUMPARROW_INDENT_START: f32 = 20.0;
 const GRID_JUMPARROW_WIDTH: f32 = 5.0;
 
-const DISASM_COLOR_INSTR: egui::Color32 = crate::theme::rgba(0x179299ff);
-const DISASM_COLOR_ABSOLUTE: egui::Color32 = crate::theme::rgba(0xe64553ff);
-const DISASM_COLOR_DIRECT: egui::Color32 = crate::theme::rgba(0x8839efff);
-const DISASM_COLOR_INDEX: egui::Color32 = crate::theme::rgba(0xdf8e1dff);
-const DISASM_COLOR_INDIRECT: egui::Color32 = crate::theme::rgba(0xfe640bff);
+pub(crate) const DISASM_COLOR_INSTR: egui::Color32 = crate::theme::rgba(0x179299ff);
+pub(crate) const DISASM_COLOR_ABSOLUTE: egui::Color32 = crate::theme::rgba(0xe64553ff);
+pub(crate) const DISASM_COLOR_DIRECT: egui::Color32 = crate::theme::rgba(0x8839efff);
+pub(crate) const DISASM_COLOR_INDEX: egui::Color32 = crate::theme::rgba(0xdf8e1dff);
+pub(crate) const DISASM_COLOR_INDIRECT: egui::Color32 = crate::theme::rgba(0xfe640bff);
+pub(crate) const DISASM_COLOR_IMMEDIATE: egui::Color32 = crate::theme::rgba(0x40a02bff);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Lit {
@@ -620,14 +621,8 @@ impl DisassemblyView {
         }
     }
 
-    fn show_flags_helper(&mut self, flags: u8, ui: &mut egui::Ui) {
-        let names = ["C", "Z", "I", "D", "X", "M", "V", "N"];
-        let text = (0..8)
-            .filter(|i| (flags >> i) & 1 != 0)
-            .map(|i| names[i])
-            .collect::<Vec<_>>()
-            .join(" | ");
-        ui.monospace(text);
+    fn show_flags_helper(&mut self, flags: FlagSet, ui: &mut egui::Ui) {
+        ui.monospace(flags.to_string());
     }
 
     fn show_helpers(
@@ -710,7 +705,7 @@ impl DisassemblyView {
                 }
                 self.show_addr_helper(dst, true, ui)
             }
-            InstructionArgument::Flags(a) => self.show_flags_helper(a.0, ui),
+            InstructionArgument::Flags(a) => self.show_flags_helper(a, ui),
             // TODO: helpers for move instructions (are there actually any needed?)
             InstructionArgument::Move(_, _) => (),
         }

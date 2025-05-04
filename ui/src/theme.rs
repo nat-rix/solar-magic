@@ -96,7 +96,7 @@ mod default_themes {
                 show_tooltips_only_when_still: true,
                 tooltip_delay: 0.5,
                 tooltip_grace_time: 0.2,
-                selectable_labels: true,
+                selectable_labels: false,
                 multi_widget_text_select: true,
             },
             visuals: Visuals {

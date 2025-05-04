@@ -97,6 +97,24 @@ impl FlagSet {
     }
 }
 
+impl core::fmt::Display for FlagSet {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if self.is_empty() {
+            return write!(f, "0");
+        }
+        let names = ["C", "Z", "I", "D", "X", "M", "V", "N"];
+        let mut first = true;
+        for flag in (0..8).filter(|i| (self.0 >> i) & 1 != 0) {
+            if !first {
+                write!(f, " | ")?;
+            }
+            first = false;
+            f.write_str(names[flag])?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct NearLabel(pub u8);
 
@@ -1168,6 +1186,103 @@ pub enum InstructionType {
     Sed,
     Plx,
     Xce,
+}
+
+impl InstructionType {
+    pub fn name(&self) -> &'static str {
+        use InstructionType::*;
+        match self {
+            Brk => "BRK",
+            Ora => "ORA",
+            Cop => "COP",
+            Tsb => "TSB",
+            Asl => "ASL",
+            Php => "PHP",
+            Phd => "PHD",
+            Bpl => "BPL",
+            Trb => "TRB",
+            Clc => "CLC",
+            Inc => "INC",
+            Tcs => "TCS",
+            And => "AND",
+            Js => "JS",
+            Bit => "BIT",
+            Rol => "ROL",
+            Plp => "PLP",
+            Pld => "PLD",
+            Bmi => "BMI",
+            Sec => "SEC",
+            Dec => "DEC",
+            Tsc => "TSC",
+            Rti => "RTI",
+            Eor => "EOR",
+            Wdm => "WDM",
+            Mvp => "MVP",
+            Lsr => "LSR",
+            Pha => "PHA",
+            Phk => "PHK",
+            Jmp => "JMP",
+            Bvc => "BVC",
+            Mvn => "MVN",
+            Cli => "CLI",
+            Phy => "PHY",
+            Tcd => "TCD",
+            Rts => "RTS",
+            Adc => "ADC",
+            Per => "PER",
+            Stz => "STZ",
+            Ror => "ROR",
+            Pla => "PLA",
+            Rtl => "RTL",
+            Bvs => "BVS",
+            Sei => "SEI",
+            Ply => "PLY",
+            Tdc => "TDC",
+            Bra => "BRA",
+            Sta => "STA",
+            Sty => "STY",
+            Stx => "STX",
+            Dey => "DEY",
+            Txa => "TXA",
+            Phb => "PHB",
+            Bcc => "BCC",
+            Tya => "TYA",
+            Txs => "TXS",
+            Txy => "TXY",
+            Ldy => "LDY",
+            Lda => "LDA",
+            Ldx => "LDX",
+            Tay => "TAY",
+            Tax => "TAX",
+            Plb => "PLB",
+            Bcs => "BCS",
+            Clv => "CLV",
+            Tsx => "TSX",
+            Tyx => "TYX",
+            Cpy => "CPY",
+            Cmp => "CMP",
+            Rep => "REP",
+            Iny => "INY",
+            Dex => "DEX",
+            Wai => "WAI",
+            Bne => "BNE",
+            Pei => "PEI",
+            Cld => "CLD",
+            Phx => "PHX",
+            Stp => "STP",
+            Cpx => "CPX",
+            Sbc => "SBC",
+            Sep => "SEP",
+            Inx => "INX",
+            Nop => "NOP",
+            Xba => "XBA",
+            Beq => "BEQ",
+            Pea => "PEA",
+            Sed => "SED",
+            Plx => "PLX",
+            Xce => "XCE",
+        }
+    }
 }
 
 pub enum InstructionFlagDependency {
